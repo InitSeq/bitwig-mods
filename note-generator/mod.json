@@ -1,0 +1,48 @@
+{
+  "manifest_version": 2,
+  "mod": {
+    "id": "note-generator",
+    "name": "Piano Roll: Note Generator",
+    "area": "Piano Roll",
+    "version": "0.1.0-dev.1",
+    "author": "Coldforge",
+    "description": "Generates chords or a melody in the project's key, from a block in the Note Inspector. Select notes to mark the range, see and hear the result before you apply it",
+    "documentation": "readme"
+  },
+  "built_against": {
+    "bitwig_version": "6.1.4",
+    "platform": "macos",
+    "architecture": "universal"
+  },
+  "requires": [
+    {
+      "id": "piano-roll-framework",
+      "min_version": "0.2.0-dev.1"
+    },
+    {
+      "id": "inspector-composition-framework",
+      "min_version": "0.3.0-dev.1"
+    },
+    {
+      "id": "notifications-framework",
+      "min_version": "0.3.0-dev.1"
+    }
+  ],
+  "resources": {
+    "readme": {
+      "kind": "file",
+      "path": "README.md",
+      "media_type": "text/markdown"
+    }
+  },
+  "registrations": [
+    {
+      "id": "inspector",
+      "consumer": "inspector-composition-framework",
+      "descriptor": "inspector-blocks.properties",
+      "jar": "helper.jar"
+    }
+  ],
+  "targets": {},
+  "hooks": []
+}
