@@ -1,17 +1,31 @@
 package ch.coldforge.notegen;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 import java.util.TreeSet;
 
 /**
- * What the generator writes: chords or a melody over a time range, in a scale. Plain Java with no Bitwig
- * names, so it can be tested without Bitwig. Times are in beats (quarter notes), bars are 4 beats.
+ * What the generator writes: chords or a melody over a time range, in a scale, laid out in a form such as
+ * A A A B. Plain Java with no Bitwig names, so it can be tested without Bitwig. Times are in beats (quarter
+ * notes), bars are 4 beats.
+ *
+ * The range is cut into sections. Each section plays the material of its letter: the same letter is the same
+ * chords or the same motif again, fitted to the harmony at its new place.
  */
 final class GenLogic {
     private GenLogic() {
     }
+
+    /** The forms on offer. Each letter is one section; a range with more sections starts the form again. */
+    static final String[] FORMS = {"AAAA", "AAAB", "AABA", "AABB", "ABAB", "ABAC", "ABCB", "ABCD"};
+
+    /** How chords are played. */
+    static final int HOLD = 0;
+    static final int PULSE = 1;
+    static final int OFFBEAT = 2;
+    static final int THREE_THREE_TWO = 3;
 
     /** A note to write. Velocity is 0 to 1. */
     record Out(int key, double start, double duration, double velocity) {
@@ -63,6 +77,13 @@ final class GenLogic {
             return semitones == 0 ? 12 : semitones;
         }
 
+        /** A major or minor triad stands on this degree. */
+        boolean consonant(int degree) {
+            int lower = interval(degree, degree + 2);
+            int upper = interval(degree + 2, degree + 4);
+            return (lower == 4 && upper == 3) || (lower == 3 && upper == 4);
+        }
+
         /** Every key of the scale, 0 to 127, ascending. */
         int[] ladder() {
             List<Integer> keys = new ArrayList<>();
@@ -78,43 +99,170 @@ final class GenLogic {
         }
     }
 
-    // Chords.
+    // Sections.
 
-    /** How likely each degree follows another in a seven-note scale: rows are from, columns are to. */
-    private static final double[][] FOLLOWS = {
-            {0, 2, 1, 3, 3, 3, 0.3}, // I
-            {0.5, 0, 1, 1, 4, 0.5, 1}, // ii
-            {0.5, 1, 0, 3, 0.5, 3, 0}, // iii
-            {3, 2, 0.3, 0, 3, 1, 0.2}, // IV
-            {4, 0.3, 0.5, 2, 0, 3, 0}, // V
-            {0.5, 2, 1, 3, 2, 0, 0.2}, // vi
-            {3, 0.2, 1, 0.2, 0.5, 0.5, 0}, // vii
-    };
+    /** The range cut into sections, each with the letter of the form it plays (0 for A). */
+    record Layout(double start, double end, double sectionBeats, int[] letters) {
+        int sections() {
+            return letters.length;
+        }
+
+        double from(int section) {
+            return start + section * sectionBeats;
+        }
+
+        double to(int section) {
+            return Math.min(end, from(section) + sectionBeats);
+        }
+
+        /** The section holding this time. */
+        int at(double time) {
+            return Math.max(0, Math.min(letters.length - 1, (int) Math.floor((time - start) / sectionBeats + 1e-9)));
+        }
+    }
 
     /**
-     * A chord progression from start to end, one chord every chordLength beats, each held until the next.
-     * The first chord is the key's own. Each chord is voiced close to the one before, around centre.
+     * sectionBeats 0 chooses the length: a quarter of the range in whole bars, so the form fits once; one bar for
+     * a range under four bars.
      */
-    static List<Out> chords(Scale scale, double start, double end, double chordLength, boolean sevenths,
-                            boolean bass, int centre, long seed) {
+    static Layout layout(double start, double end, String form, double sectionBeats) {
+        double total = end - start;
+        double section = sectionBeats;
+        if (!(section > 0)) {
+            int bars = (int) Math.floor(total / 4 + 1e-9);
+            section = bars >= 4 ? (bars / 4) * 4.0 : Math.min(4.0, total);
+        }
+        section = Math.min(section, total);
+        int count = Math.max(1, (int) Math.ceil(total / section - 1e-9));
+        int[] letters = new int[count];
+        for (int i = 0; i < count; i++) {
+            letters[i] = Math.max(0, Math.min(3, form.charAt(i % form.length()) - 'A'));
+        }
+        return new Layout(start, end, section, letters);
+    }
+
+    // Chords.
+
+    /** Four-chord loops in a major key, as degrees from 0. */
+    private static final int[][] MAJOR_LOOPS = {
+            {0, 4, 5, 3}, {0, 5, 3, 4}, {0, 3, 5, 4}, {0, 3, 0, 4}, {0, 2, 3, 4}, {0, 5, 1, 4},
+            {5, 3, 0, 4}, {3, 0, 4, 5}, {1, 4, 0, 5}, {3, 4, 5, 0}, {5, 4, 3, 4},
+    };
+
+    /** Four-chord loops in a minor key, as degrees from 0. */
+    private static final int[][] MINOR_LOOPS = {
+            {0, 5, 2, 6}, {0, 6, 5, 6}, {0, 3, 5, 4}, {0, 5, 3, 4}, {0, 2, 6, 5}, {0, 4, 5, 3}, {0, 6, 5, 4},
+            {5, 6, 0, 0}, {3, 0, 6, 5}, {5, 2, 6, 0}, {3, 5, 6, 0}, {2, 6, 0, 5},
+    };
+
+    /** The four loops the letters draw on: the first starts on the key's own chord. */
+    private static int[][] loops(Scale scale, long seed) {
+        Random random = new Random(seed * 7919 + 13);
+        if (scale.size() != 7) { // no seven degrees to name: a walk over the scale's own chords
+            int[][] walks = new int[4][4];
+            for (int[] walk : walks) {
+                for (int i = 0; i < 4; i++) {
+                    walk[i] = random.nextInt(scale.size());
+                }
+            }
+            walks[0][0] = 0;
+            return walks;
+        }
+        List<int[]> pool = new ArrayList<>(List.of(scale.interval(0, 2) == 3 ? MINOR_LOOPS : MAJOR_LOOPS));
+        Collections.shuffle(pool, random);
+        List<int[]> chosen = new ArrayList<>();
+        for (int[] loop : pool) {
+            if (loop[0] == 0) {
+                chosen.add(loop);
+                break;
+            }
+        }
+        for (int[] loop : pool) {
+            if (chosen.size() < 4 && !chosen.contains(loop)) {
+                chosen.add(loop);
+            }
+        }
+        int[][] loops = new int[4][];
+        for (int i = 0; i < 4; i++) {
+            loops[i] = chosen.get(i).clone();
+            for (int j = 0; j < 4; j++) {
+                loops[i][j] = singable(scale, loops[i][j]);
+            }
+        }
+        return loops;
+    }
+
+    /** This degree, or a near one when its chord is diminished or augmented in this scale. */
+    private static int singable(Scale scale, int degree) {
+        for (int other : new int[] {degree, degree + 2, degree + 5, 0}) {
+            if (scale.consonant(other)) {
+                return Math.floorMod(other, scale.size());
+            }
+        }
+        return degree;
+    }
+
+    /** The degrees of one section's chords. A section of one or two chords shares a loop with its neighbours. */
+    private static int[] sectionDegrees(int[][] loops, int letter, int chords) {
+        int[] degrees = new int[chords];
+        for (int i = 0; i < chords; i++) {
+            if (chords == 1) {
+                degrees[i] = loops[0][letter];
+            } else if (chords == 2) {
+                degrees[i] = loops[letter / 2][(letter % 2) * 2 + i];
+            } else {
+                degrees[i] = loops[letter][i % 4];
+            }
+        }
+        return degrees;
+    }
+
+    /** A chord in time: its degree, and when it sounds. */
+    private record Slot(int degree, double from, double to) {
+    }
+
+    private static List<Slot> slots(Scale scale, Layout layout, double chordLength, long seed) {
+        int[][] loops = loops(scale, seed);
+        List<Slot> slots = new ArrayList<>();
+        for (int section = 0; section < layout.sections(); section++) {
+            double from = layout.from(section);
+            double to = layout.to(section);
+            double length = Math.min(chordLength, layout.sectionBeats());
+            int chords = Math.max(1, (int) Math.ceil(layout.sectionBeats() / length - 1e-9));
+            int[] degrees = sectionDegrees(loops, layout.letters()[section], chords);
+            for (int i = 0; i < chords; i++) {
+                double at = from + i * length;
+                if (at < to - 1e-6) {
+                    slots.add(new Slot(degrees[i], at, Math.min(to, at + length)));
+                }
+            }
+        }
+        return slots;
+    }
+
+    /**
+     * A chord progression over the range, laid out in the form. Each chord is voiced close to the one before,
+     * around centre, and played in the rhythm given.
+     */
+    static List<Out> chords(Scale scale, double start, double end, double chordLength, boolean sevenths, boolean bass,
+                            int centre, int rhythm, String form, double sectionBeats, long seed) {
         List<Out> out = new ArrayList<>();
-        if (!(end > start) || !(chordLength > 0)) {
+        if (!(end - start > 1e-6) || !(chordLength > 0)) {
             return out;
         }
         Random random = new Random(seed);
-        int count = Math.max(1, (int) Math.ceil((end - start) / chordLength - 1e-9));
-        int[] degrees = progression(scale, count, random);
+        Layout layout = layout(start, end, form, sectionBeats);
         double target = centre;
-        for (int i = 0; i < count; i++) {
-            double from = start + i * chordLength;
-            double length = Math.min(chordLength, end - from);
-            if (!(length > 1e-6)) {
-                break;
+        int section = -1;
+        for (Slot slot : slots(scale, layout, chordLength, seed)) {
+            if (layout.at(slot.from()) != section) { // each section starts from the centre, so a letter sounds the same each time
+                section = layout.at(slot.from());
+                target = centre;
             }
             int tones = Math.min(scale.size(), sevenths ? 4 : 3);
             TreeSet<Integer> keys = new TreeSet<>();
             for (int tone = 0; tone < tones; tone++) {
-                keys.add(nearest(scale.pitchClass(degrees[i] + 2 * tone), target));
+                keys.add(nearest(scale.pitchClass(slot.degree() + 2 * tone), target));
             }
             double sum = 0;
             for (int key : keys) {
@@ -122,48 +270,50 @@ final class GenLogic {
             }
             // The next chord stays near this one, but never drifts far from the centre.
             target = Math.max(centre - 5, Math.min(centre + 5, sum / keys.size()));
-            if (bass) {
-                int low = centre - 24;
-                keys.add(low + Math.floorMod(scale.pitchClass(degrees[i]) - low, 12));
+            int low = centre - 24;
+            int root = low + Math.floorMod(scale.pitchClass(slot.degree()) - low, 12);
+
+            for (double[] hit : hits(rhythm, slot.from(), slot.to(), false)) {
+                for (int key : keys) {
+                    add(out, key, hit, 0.72, random);
+                }
             }
-            for (int key : keys) {
-                if (key >= 0 && key <= 127) {
-                    out.add(new Out(key, from, length, clamp(0.72 + (random.nextDouble() - 0.5) * 0.08)));
+            if (bass) {
+                for (double[] hit : hits(rhythm, slot.from(), slot.to(), true)) {
+                    add(out, root, hit, 0.78, random);
                 }
             }
         }
         return out;
     }
 
-    /** The degrees of the chords: starts on the key's own chord, never repeats a chord, ends leading back to it. */
-    static int[] progression(Scale scale, int count, Random random) {
-        int size = scale.size();
-        int[] degrees = new int[count];
-        for (int i = 1; i < count; i++) {
-            double[] weights = new double[size];
-            for (int to = 0; to < size; to++) {
-                if (to == degrees[i - 1]) {
-                    continue;
-                }
-                double weight = size == 7 ? FOLLOWS[degrees[i - 1]][to] : 1;
-                if (size >= 5 && !consonant(scale, to)) {
-                    weight *= 0.15; // diminished and augmented chords are rare
-                }
-                if (size == 7 && i == count - 1 && count >= 4) {
-                    weight *= to == 4 ? 3 : to == 3 ? 2 : to == 0 ? 0.2 : 1; // the loop comes home through V or IV
-                }
-                weights[to] = weight;
-            }
-            degrees[i] = pick(weights, random);
+    private static void add(List<Out> out, int key, double[] hit, double velocity, Random random) {
+        if (key >= 0 && key <= 127 && hit[1] > 1e-6) {
+            out.add(new Out(key, hit[0], hit[1], clamp(velocity + (random.nextDouble() - 0.5) * 0.08)));
         }
-        return degrees;
     }
 
-    /** A major or minor triad on this degree. */
-    private static boolean consonant(Scale scale, int degree) {
-        int lower = scale.interval(degree, degree + 2);
-        int upper = scale.interval(degree + 2, degree + 4);
-        return (lower == 4 && upper == 3) || (lower == 3 && upper == 4);
+    /** Where a chord (or its bass) is struck between from and to: pairs of start and length. */
+    private static List<double[]> hits(int rhythm, double from, double to, boolean bass) {
+        List<double[]> hits = new ArrayList<>();
+        if (rhythm == HOLD) {
+            hits.add(new double[] {from, to - from});
+        } else if (rhythm == PULSE) {
+            for (double at = from; at < to - 1e-6; at += 1) {
+                hits.add(new double[] {at, Math.min(0.75, to - at)});
+            }
+        } else if (rhythm == OFFBEAT) { // the bass on the beat, the chord between the beats
+            for (double at = from + (bass ? 0 : 0.5); at < to - 1e-6; at += 1) {
+                hits.add(new double[] {at, Math.min(0.5, to - at)});
+            }
+        } else {
+            double[] lengths = {1.5, 1.5, 1};
+            int i = 0;
+            for (double at = from; at < to - 1e-6; at += lengths[i++ % 3]) {
+                hits.add(new double[] {at, Math.min(lengths[i % 3] - 0.25, to - at)});
+            }
+        }
+        return hits;
     }
 
     /** The key with this pitch class nearest to target. */
@@ -175,101 +325,124 @@ final class GenLogic {
 
     // Melody.
 
-    private static final int[] MOVES = {-4, -3, -2, -1, 0, 1, 2, 3, 4};
-    private static final double[] MOVE_WEIGHTS = {0.5, 1, 3, 5, 1, 5, 3, 1, 0.5};
+    /** Rhythms of eight steps: x starts a note. Few notes, some, many. */
+    private static final String[][] CELLS = {
+            {"x.......", "x...x...", "x.....x.", "x..x....", "x....x..", "..x...x."},
+            {"x..x..x.", "x.x...x.", "x...x.x.", "x.x.x...", "x..x.x..", "x.xx..x.", "..x.x.x.", "x..x...x"},
+            {"x.xx.xx.", "xx.x.xx.", "x.x.x.xx", "xxx.x.x.", "x.xxx.x.", "x.x.xx.x", "xx.xx.x."},
+    };
 
-    /**
-     * A one-voice melody from start to end on a grid of step beats. A two-bar rhythm repeats, and each repeat
-     * starts with the first one's shape before it goes its own way. Notes on the beat lean on the harmony
-     * sounding there (the key's own chord when nothing sounds), and the last note comes to rest.
-     */
-    static List<Out> melody(Scale scale, double start, double end, double step, int densityPercent, int centre,
-                            List<Sounding> harmony, long seed) {
-        List<Out> out = new ArrayList<>();
-        if (!(end > start) || !(step > 0)) {
-            return out;
-        }
-        Random random = new Random(seed);
-        int total = Math.max(1, (int) Math.floor((end - start) / step + 1e-6));
-        int beat = Math.max(1, (int) Math.round(1 / step));
-        int bar = beat * 4;
-        int unit = Math.min(total, bar * 2);
-        double density = Math.max(1, Math.min(100, densityPercent)) / 100.0;
+    /** A note of a motif: where it starts in the section, how long it is held, how high above the anchor. */
+    private record Tone(int step, int held, int height) {
+    }
 
-        // The rhythm: where notes start within the unit, and how long each is held.
-        boolean[] onset = new boolean[unit];
-        for (int i = 0; i < unit; i++) {
-            int place = i % bar;
-            double weight = place == 0 ? 1 : place % beat == 0 ? 0.85 : beat >= 2 && place % (beat / 2) == 0 ? 0.55 : 0.3;
-            onset[i] = i == 0 || random.nextDouble() < weight * (0.25 + 1.5 * density);
+    /** One letter's motif over a section of this many steps. */
+    private static List<Tone> motif(int letter, int steps, double density, long seed) {
+        Random random = new Random(seed * 1000003 + letter * 7717 + 5);
+        // Three rhythm cells, laid out a b a c: the motif repeats itself before it moves on.
+        String[] cells = new String[3];
+        for (int i = 0; i < 3; i++) {
+            double[] tiers = {Math.max(0.05, 1 - 2.2 * density), 1 - Math.abs(density - 0.5) * 1.6, Math.max(0.05, 2.2 * density - 1.2)};
+            String[] tier = CELLS[pick(tiers, random)];
+            do {
+                cells[i] = tier[random.nextInt(tier.length)];
+            } while (i == 0 && cells[i].charAt(0) != 'x');
         }
-        int[] held = new int[unit];
-        for (int i = 0; i < unit; i++) {
-            if (onset[i]) {
-                int gap = 1;
-                while (i + gap < unit && !onset[i + gap]) {
-                    gap++;
-                }
-                held[i] = gap > 1 && random.nextDouble() < 0.3 ? Math.max(1, gap / 2) : Math.min(gap, bar);
+        List<Integer> onsets = new ArrayList<>();
+        for (int step = 0; step < steps; step++) {
+            String cell = cells[new int[] {0, 1, 0, 2}[(step / 8) % 4]];
+            if (step == 0 || cell.charAt(step % 8) == 'x') {
+                onsets.add(step);
             }
         }
+        // The line: one clear shape per motif, a different one for each letter.
+        int shape = Math.floorMod((int) (seed % 5) + letter * 2 + (letter > 0 ? random.nextInt(2) : 0), 5);
+        int lift = new int[] {0, 2, -2, 3}[letter];
+        List<Tone> tones = new ArrayList<>();
+        int before = 0;
+        for (int i = 0; i < onsets.size(); i++) {
+            int step = onsets.get(i);
+            double place = steps <= 1 ? 0 : (double) step / steps;
+            double line = switch (shape) {
+                case 0 -> 4 * Math.sin(Math.PI * place); // an arch
+                case 1 -> 4 - 5 * place; // falling
+                case 2 -> -1 + 5 * place; // rising
+                case 3 -> 2.5 * Math.sin(2 * Math.PI * place); // a wave
+                default -> 1 - 3 * Math.sin(Math.PI * place); // a valley
+            };
+            int height = (int) Math.round(line) + lift + new int[] {-1, 0, 0, 0, 1}[random.nextInt(5)];
+            if (i > 0) {
+                height = Math.max(before - 3, Math.min(before + 3, height)); // no wide leaps
+            }
+            before = height;
+            boolean lastTone = i == onsets.size() - 1;
+            int gap = (lastTone ? steps : onsets.get(i + 1)) - step;
+            tones.add(new Tone(step, Math.min(gap, lastTone ? 8 : 4), height));
+        }
+        return tones;
+    }
 
+    /**
+     * A one-voice melody over the range on a grid of step beats, laid out in the form. Each letter is a motif:
+     * a rhythm and a line. Where a letter comes again the motif comes again, with its notes on the beat moved
+     * to the harmony sounding there. Each section ends on a tone of its chord, the last one at rest. With no
+     * harmony given, the melody follows the chords the same seed and form would generate.
+     */
+    static List<Out> melody(Scale scale, double start, double end, double step, int densityPercent, int centre,
+                            List<Sounding> harmony, String form, double sectionBeats, long seed) {
+        List<Out> out = new ArrayList<>();
+        if (!(end - start > 1e-6) || !(step > 0)) {
+            return out;
+        }
+        Layout layout = layout(start, end, form, sectionBeats);
+        if (harmony.isEmpty()) {
+            harmony = new ArrayList<>();
+            for (Slot slot : slots(scale, layout, 4, seed)) {
+                for (int tone = 0; tone < Math.min(3, scale.size()); tone++) {
+                    harmony.add(new Sounding(scale.pitchClass(slot.degree() + 2 * tone), slot.from(), slot.to()));
+                }
+            }
+        }
+        Random random = new Random(seed * 31 + 7);
+        double density = Math.max(1, Math.min(100, densityPercent)) / 100.0;
+        int sectionSteps = Math.max(1, (int) Math.round(layout.sectionBeats() / step));
         int[] ladder = scale.ladder();
         int lowest = indexNear(ladder, centre - 14);
         int highest = indexNear(ladder, centre + 14);
-        int[] shape = new int[unit]; // the first unit's moves, for the repeats
-        int at = -1;
-        int last = lastOnset(onset, unit, total);
-        for (int i = 0; i < total; i++) {
-            int place = i % unit;
-            if (!onset[place]) {
-                continue;
-            }
-            double time = start + i * step;
-            List<Integer> chord = chordAt(scale, harmony, time);
-            boolean onBeat = place % beat == 0;
-            if (at < 0) {
-                at = snap(ladder, indexNear(ladder, centre), chord, 7, lowest, highest);
-            } else {
-                int move;
-                if (i >= unit && place < unit / 2 && random.nextDouble() < 0.8) {
-                    move = shape[place];
-                } else {
-                    double[] weights = MOVE_WEIGHTS.clone();
-                    for (int m = 0; m < MOVES.length; m++) {
-                        if ((ladder[at] > centre + 7 && MOVES[m] > 0) || (ladder[at] < centre - 7 && MOVES[m] < 0)) {
-                            weights[m] *= 0.3; // turn back towards the centre
-                        }
-                    }
-                    move = MOVES[pick(weights, random)];
-                }
-                if (i < unit) {
-                    shape[place] = move;
-                }
-                at = Math.max(lowest, Math.min(highest, at + move));
-                if (i == last) {
-                    List<Integer> rest = chord.contains(scale.root) ? List.of(scale.root) : chord;
-                    at = snap(ladder, at, rest, 7, lowest, highest);
-                } else if (onBeat && random.nextDouble() < 0.75) {
-                    at = snap(ladder, at, chord, 3, lowest, highest);
+        List<List<Tone>> motifs = new ArrayList<>();
+        for (int letter = 0; letter < 4; letter++) {
+            motifs.add(motif(letter, sectionSteps, density, seed));
+        }
+
+        for (int section = 0; section < layout.sections(); section++) {
+            double from = layout.from(section);
+            double to = layout.to(section);
+            List<Tone> tones = motifs.get(layout.letters()[section]);
+            int anchor = snap(ladder, indexNear(ladder, centre), chordAt(scale, harmony, from), 4, lowest, highest);
+            int sounding = 0;
+            for (Tone tone : tones) {
+                if (from + tone.step() * step < to - 1e-6) {
+                    sounding++;
                 }
             }
-            double length = Math.min(held[place] * step, end - time);
-            if (length > 1e-6) {
-                double accent = place % bar == 0 ? 0.8 : onBeat ? 0.72 : 0.6;
-                out.add(new Out(ladder[at], time, length, clamp(accent + (random.nextDouble() - 0.5) * 0.1)));
+            for (int i = 0; i < sounding; i++) {
+                Tone tone = tones.get(i);
+                double time = from + tone.step() * step;
+                List<Integer> chord = chordAt(scale, harmony, time);
+                int at = Math.max(lowest, Math.min(highest, anchor + tone.height()));
+                if (i == sounding - 1 && section == layout.sections() - 1) {
+                    at = snap(ladder, at, chord.contains(scale.root) ? List.of(scale.root) : chord, 7, lowest, highest);
+                } else if (i == sounding - 1) {
+                    at = snap(ladder, at, chord, 4, lowest, highest);
+                } else if (tone.step() % 4 == 0) {
+                    at = snap(ladder, at, chord, 2, lowest, highest);
+                }
+                double length = Math.min(tone.held() * step, to - time);
+                double accent = tone.step() % 8 == 0 ? 0.82 : tone.step() % 4 == 0 ? 0.72 : 0.62;
+                out.add(new Out(ladder[at], time, length, clamp(accent + (random.nextDouble() - 0.5) * 0.08)));
             }
         }
         return out;
-    }
-
-    private static int lastOnset(boolean[] onset, int unit, int total) {
-        for (int i = total - 1; i > 0; i--) {
-            if (onset[i % unit]) {
-                return i;
-            }
-        }
-        return 0;
     }
 
     /** The pitch classes sounding at this time; the key's own chord when nothing sounds. */
@@ -298,7 +471,7 @@ final class GenLogic {
                 }
             }
         }
-        return index;
+        return Math.max(lowest, Math.min(highest, index));
     }
 
     private static int indexNear(int[] ladder, int key) {
@@ -314,24 +487,16 @@ final class GenLogic {
     private static int pick(double[] weights, Random random) {
         double sum = 0;
         for (double weight : weights) {
-            sum += weight;
-        }
-        if (!(sum > 0)) {
-            return random.nextInt(weights.length);
+            sum += Math.max(0, weight);
         }
         double point = random.nextDouble() * sum;
         for (int i = 0; i < weights.length; i++) {
-            point -= weights[i];
-            if (point < 0 && weights[i] > 0) {
+            point -= Math.max(0, weights[i]);
+            if (point < 0) {
                 return i;
             }
         }
-        for (int i = weights.length - 1; i >= 0; i--) {
-            if (weights[i] > 0) {
-                return i;
-            }
-        }
-        return 0;
+        return weights.length - 1;
     }
 
     private static double clamp(double velocity) {

@@ -28,8 +28,9 @@ import java.util.Set;
 /**
  * The Note Generator block in the Note Inspector, its preview and Apply.
  *
- * The selected notes mark where to write: the clip, the channel and the time from the first note's start to the
- * last note's end. Mode chooses chords or a melody, in Bitwig's key at that place. Nothing shows until the user
+ * With notes selected, they mark where to write: the clip, the channel and the time from the first note's start to
+ * the last note's end. With none, it writes over the whole clip open in the Detail Editor, from the block in the
+ * clip's Inspector. Mode chooses chords or a melody, in Bitwig's key at that place, laid out in a form. Nothing shows until the user
  * changes a row or clicks Dice; then the outcome is drawn as Bitwig's preview notes and plays in place of the
  * clip's notes. Selecting other notes, editing notes, Undo and Redo take the preview away. Apply writes it as one
  * Undo step.
@@ -49,7 +50,17 @@ public final class NoteGeneratorUi implements InspectorProvider {
     private static final double[] RATE_BEATS = {1, 0.5, 0.25};
     private static final String[] REGISTERS = {"Low", "Mid", "High"};
     private static final int[] CENTRES = {48, 60, 72};
-    private static final String[] SELECTION = {"Replace", "Keep"};
+    private static final String[] EXISTING = {"Replace", "Keep"};
+    private static final String[] FORM_LABELS = new String[GenLogic.FORMS.length];
+    private static final String[] SECTIONS = {"Auto", "1 bar", "2 bars", "4 bars"};
+    private static final double[] SECTION_BEATS = {0, 4, 8, 16};
+    private static final String[] RHYTHMS = {"Hold", "Pulse", "Offbeat", "3-3-2"};
+
+    static {
+        for (int i = 0; i < FORM_LABELS.length; i++) {
+            FORM_LABELS[i] = String.join(" ", GenLogic.FORMS[i].split(""));
+        }
+    }
 
     // The values, kept until Bitwig closes.
     private static int mode = CHORDS;
@@ -57,10 +68,13 @@ public final class NoteGeneratorUi implements InspectorProvider {
     private static int chordLength = 1;
     private static int chordType = 0;
     private static int bass = 1;
+    private static int rhythm = GenLogic.HOLD;
+    private static int form = 1; // A A A B
+    private static int section = 0;
     private static int rate = 2;
     private static int density = 50;
     private static final int[] register = {1, 2}; // per mode: chords in the middle, a melody above them
-    private static final int[] selection = {0, 1}; // per mode: chords replace the selected notes, a melody keeps them
+    private static final int[] existing = {0, 1}; // per mode: chords replace the notes there, a melody keeps them
 
     private static final List<WeakReference<BlockContext>> built = new ArrayList<>();
 
@@ -73,57 +87,85 @@ public final class NoteGeneratorUi implements InspectorProvider {
     private static boolean previewPosted;
     private static String said; // the refusal last told while values change: said once, not per update
 
-    /** The generated notes over the selected notes' range, as a plan. */
-    private static Edit plan(Object bitwigSelection) {
-        List<Note> marks = new ArrayList<>(new LinkedHashSet<>(PianoRoll.selection(bitwigSelection).notes()));
-        if (marks.isEmpty()) {
-            throw new Refused("select a note to mark where to write");
-        }
-        Clip clip = marks.get(0).clip();
-        if (clip == null) {
-            throw new Refused("the notes' clip can't be read");
-        }
-        double start = Double.MAX_VALUE;
-        double end = -Double.MAX_VALUE;
-        for (Note mark : marks) {
-            if (!clip.equals(mark.clip())) {
-                throw new Refused("select notes of one clip");
+    /** The generated notes, as a plan: over the selected notes' range, or with none selected over the whole clip. */
+    private static Edit plan(BlockContext context) {
+        List<Note> marks = marks(context);
+        Clip clip;
+        double start;
+        double end;
+        List<Note> there; // the notes Replace removes
+        if (!marks.isEmpty()) {
+            clip = marks.get(0).clip();
+            if (clip == null) {
+                throw new Refused("the notes' clip can't be read");
             }
-            start = Math.min(start, mark.start());
-            end = Math.max(end, mark.end());
+            start = Double.MAX_VALUE;
+            end = -Double.MAX_VALUE;
+            for (Note mark : marks) {
+                if (!clip.equals(mark.clip())) {
+                    throw new Refused("select notes of one clip");
+                }
+                start = Math.min(start, mark.start());
+                end = Math.max(end, mark.end());
+            }
+            there = marks;
+        } else {
+            DetailEditor.Open open = DetailEditor.open();
+            if (open == null) {
+                throw new Refused("open a note clip in the Detail Editor, or select notes");
+            }
+            clip = open.clip();
+            start = open.start();
+            end = open.end();
+            there = clip.notesBetween(start, end);
         }
         GenLogic.Scale scale = scaleAt(clip, start);
-        boolean replace = selection[mode] == 0;
+        boolean replace = existing[mode] == 0;
         int centre = CENTRES[register[mode]];
+        String letters = GenLogic.FORMS[form];
+        double sectionBeats = SECTION_BEATS[section];
 
         List<GenLogic.Out> notes;
         if (mode == CHORDS) {
-            notes = GenLogic.chords(scale, start, end, CHORD_BEATS[chordLength], chordType == 1, bass == 1, centre, seed);
+            notes = GenLogic.chords(scale, start, end, CHORD_BEATS[chordLength], chordType == 1, bass == 1, centre, rhythm,
+                    letters, sectionBeats, seed);
         } else {
-            Set<Note> leaving = replace ? new HashSet<>(marks) : Set.of();
+            Set<Note> leaving = replace ? new HashSet<>(there) : Set.of();
             List<GenLogic.Sounding> harmony = new ArrayList<>();
             for (Note other : clip.notesBetween(start, end)) {
                 if (!leaving.contains(other)) {
                     harmony.add(new GenLogic.Sounding(other.key(), other.start(), other.end()));
                 }
             }
-            notes = GenLogic.melody(scale, start, end, RATE_BEATS[rate], density, centre, harmony, seed);
+            notes = GenLogic.melody(scale, start, end, RATE_BEATS[rate], density, centre, harmony, letters, sectionBeats, seed);
         }
         if (notes.isEmpty()) {
-            throw new Refused("the selected range is too short");
+            throw new Refused("the range is too short");
         }
 
         Edit edit = PianoRoll.edit(mode == CHORDS ? "Generate Chords" : "Generate Melody");
         if (replace) {
-            for (Note mark : marks) {
-                edit.remove(mark);
+            for (Note note : there) {
+                edit.remove(note);
             }
         }
-        int channel = marks.get(0).channel();
+        int channel = there.isEmpty() ? 0 : there.get(0).channel();
         for (GenLogic.Out out : notes) {
             edit.add(clip, channel, out.key(), out.start(), out.duration(), out.velocity(), null);
         }
         return edit;
+    }
+
+    /** The selected notes, each once. None in a clip's Inspector, or when nothing is selected. */
+    private static List<Note> marks(BlockContext context) {
+        if (context.context() != Context.NOTE) {
+            return List.of();
+        }
+        try {
+            return new ArrayList<>(new LinkedHashSet<>(PianoRoll.selection(context.panel()).notes()));
+        } catch (Refused e) {
+            return List.of();
+        }
     }
 
     /** Bitwig's key at this beat of the clip; C major when it can't be read. */
@@ -165,7 +207,7 @@ public final class NoteGeneratorUi implements InspectorProvider {
     private static void showPreview(BlockContext context) {
         endPreview();
         try {
-            Edit edit = plan(context.panel());
+            Edit edit = plan(context);
             Preview shown = edit.preview(true, true, true); // drawn as Apply would leave it, and heard when the clip plays
             preview = shown;
             previewed = edit;
@@ -193,7 +235,7 @@ public final class NoteGeneratorUi implements InspectorProvider {
         Edit shown = preview != null && preview.isShown() && !previewPosted ? previewed : null;
         endAll();
         try {
-            (shown != null ? shown : plan(context.panel())).apply();
+            (shown != null ? shown : plan(context)).apply();
         } catch (Refused e) {
             Notifications.toast(LABEL + ": " + e.getMessage());
         } catch (RuntimeException e) {
@@ -262,22 +304,25 @@ public final class NoteGeneratorUi implements InspectorProvider {
     @Override
     public void declare(Blocks blocks) {
         blocks.block("note_generator", LABEL)
-              .in(Context.NOTE)
+              .in(Context.NOTE, Context.ARRANGER_CLIP, Context.LAUNCHER_CLIP)
               .content(context -> {
                   built.removeIf(block -> block.get() == null);
                   built.add(new WeakReference<>(context));
                   Object rows = Rows.column(
                           Rows.choice(context, "Mode", MODES, () -> mode, value -> mode = value).row(),
+                          Rows.choice(context, "Form", FORM_LABELS, () -> form, value -> form = value).row(),
+                          Rows.steps(context, "Section", SECTIONS, 0, () -> section, value -> section = value),
                           Rows.when(context, () -> mode == CHORDS,
                                   Rows.steps(context, "Length", CHORD_LENGTHS, 1, () -> chordLength, value -> chordLength = value),
                                   Rows.choice(context, "Chords", CHORD_TYPES, () -> chordType, value -> chordType = value).row(),
+                                  Rows.choice(context, "Rhythm", RHYTHMS, () -> rhythm, value -> rhythm = value).row(),
                                   Rows.choice(context, "Bass", OFF_ON, () -> bass, value -> bass = value).row()),
                           Rows.when(context, () -> mode == MELODY,
                                   Rows.steps(context, "Rate", RATES, 2, () -> rate, value -> rate = value),
                                   Rows.number(context, "Density", 1, 100, 50, " %", false, () -> density,
                                           value -> density = (int) value)),
                           Rows.choice(context, "Register", REGISTERS, () -> register[mode], value -> register[mode] = value).row(),
-                          Rows.choice(context, "Selection", SELECTION, () -> selection[mode], value -> selection[mode] = value).row(),
+                          Rows.choice(context, "Existing", EXISTING, () -> existing[mode], value -> existing[mode] = value).row(),
                           Rows.number(context, "Seed", 1, 999, 1, "", false, () -> seed, value -> seed = (int) value),
                           Rows.button(context, "Dice", () -> dice(context)),
                           Rows.button(context, "Apply", () -> apply(context)));

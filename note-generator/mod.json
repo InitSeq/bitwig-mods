@@ -4,13 +4,13 @@
     "id": "note-generator",
     "name": "Piano Roll: Note Generator",
     "area": "Piano Roll",
-    "version": "0.1.0-dev.1",
+    "version": "0.2.0-dev.1",
     "author": "Coldforge",
-    "description": "Generates chords or a melody in the project's key, from a block in the Note Inspector. Select notes to mark the range, see and hear the result before you apply it",
+    "description": "Generates chords or a melody in the project's key, laid out in a form such as A A A B, from a block in the Inspector. Works on the whole clip or on the selected notes' range. See and hear the result before you apply it",
     "documentation": "readme"
   },
   "built_against": {
-    "bitwig_version": "6.1.4",
+    "bitwig_version": "6.1.7",
     "platform": "macos",
     "architecture": "universal"
   },
@@ -43,6 +43,30 @@
       "jar": "helper.jar"
     }
   ],
-  "targets": {},
-  "hooks": []
+  "targets": {
+    "aNi.Gef": {
+      "kind": "method",
+      "owner": "aNi",
+      "name": "Gef",
+      "descriptor": "(LHSH;Lbke;LbaN;)V"
+    }
+  },
+  "hooks": [
+    {
+      "id": "detail-editor-set-up",
+      "target": "aNi.Gef",
+      "transform": "INSERT_AT_ENTRY",
+      "bridge": {
+        "method": "setUp",
+        "descriptor": "(LaNi;)V",
+        "args": [
+          "this"
+        ]
+      }
+    }
+  ],
+  "helper": {
+    "jar": "helper.jar",
+    "class": "ch.coldforge.notegen.DetailEditor"
+  }
 }
