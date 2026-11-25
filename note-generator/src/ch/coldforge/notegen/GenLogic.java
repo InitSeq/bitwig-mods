@@ -122,15 +122,18 @@ final class GenLogic {
     }
 
     /**
-     * sectionBeats 0 chooses the length: a quarter of the range in whole bars, so the form fits once; one bar for
-     * a range under four bars.
+     * sectionBeats 0 chooses the length so that the form fits the range exactly once: a quarter of the range, when
+     * that is whole bars (16 bars: 4 bars each, 4 bars: 1 bar each) or, in a range of up to two bars, whole beats.
+     * Any other range gets one-bar sections, and the form starts again after its last letter.
      */
     static Layout layout(double start, double end, String form, double sectionBeats) {
         double total = end - start;
         double section = sectionBeats;
         if (!(section > 0)) {
-            int bars = (int) Math.floor(total / 4 + 1e-9);
-            section = bars >= 4 ? (bars / 4) * 4.0 : Math.min(4.0, total);
+            double quarter = total / form.length();
+            boolean wholeBars = quarter >= 4 - 1e-9 && Math.abs(quarter / 4 - Math.rint(quarter / 4)) < 1e-9;
+            boolean wholeBeats = total <= 8 + 1e-9 && quarter >= 1 - 1e-9 && Math.abs(quarter - Math.rint(quarter)) < 1e-9;
+            section = wholeBars || wholeBeats ? quarter : Math.min(4.0, total);
         }
         section = Math.min(section, total);
         int count = Math.max(1, (int) Math.ceil(total / section - 1e-9));

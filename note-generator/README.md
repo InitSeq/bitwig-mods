@@ -21,8 +21,8 @@ Generates **chords** or a **melody** in the project's key, laid out in a form su
 | Where | Shows what will be filled: the time selection or the whole clip, and how long it is |
 | Range | **Time selection** (when there is one) or **Whole clip** |
 | Mode | **Chords** or **Melody** |
-| Form | The order of the sections: A A A A, A A A B, A A B A, A A B B, A B A B, A B A C, A B C B or A B C D. The same letter is the same notes again, exactly: with one-bar sections, A A A B is three equal bars and a different fourth |
-| Section | How long one letter is. **Auto**: a quarter of the range, so the form fits once (16 bars: 4 bars each). Or 1, 2 or 4 bars; a longer range starts the form again |
+| Form | The order of the parts: A A A A, A A A B, A A B A, A A B B, A B A B, A B A C, A B C B or A B C D. The same letter is the same notes again, exactly. The form divides the range: over 4 bars each letter is one bar, so A A A B is three equal bars and a different fourth, and A B C D is four different bars |
+| Parts | Shows how the form falls on the range now, for example "A A A B · 1 bar each" |
 | Register | Low, Mid or High (around C2, C3, C4) |
 | Chord every (Chords) | Half a bar, a bar or two bars |
 | Chords (Chords) | Triads or seventh chords |
@@ -31,9 +31,9 @@ Generates **chords** or a **melody** in the project's key, laid out in a form su
 | Rate (Melody) | The note value: quarter, eighth or sixteenth notes |
 | Density (Melody) | How many steps of the rate get a note: Sparse, Medium or Busy |
 | Glide (Melody) | **Some** or **Many** notes run on into the next one, by half a step. A synth set to legato or glide then slides between them |
-| Existing | **Replace mine**: takes out what this mode last generated in the range and leaves everything else. **Replace all**: takes out every note in the range. **Keep**: adds to what is there |
+| Existing | **Replace mine**: takes out what this mode generated in the range before (until Bitwig is closed) and leaves everything else. **Replace all**: takes out every note in the range. **Keep**: adds to what is there |
 
-A form needs room: with four sections of one bar each, the range should be at least four bars long.
+How long a part is follows from the range: a quarter of it when that is whole bars (4 bars: 1 bar, 8 bars: 2 bars, 16 bars: 4 bars), or whole beats in a range of up to two bars. Any other range (5 or 6 bars, say) gets one-bar parts, and the form starts again after its last letter.
 
 ## What it generates
 

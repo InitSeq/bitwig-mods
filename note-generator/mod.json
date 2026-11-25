@@ -4,7 +4,7 @@
     "id": "note-generator",
     "name": "Piano Roll: Note Generator",
     "area": "Piano Roll",
-    "version": "0.5.0-dev.1",
+    "version": "0.6.0-dev.1",
     "author": "Coldforge",
     "description": "Generates chords or a melody in the project's key, laid out in a form such as A A A B. Make a time selection in a clip's note editor (or none, for the whole clip), then choose Generate Notes\u2026 from the right-click menu or the button beside the piano keys, and pick the options in a dialog",
     "documentation": "readme"

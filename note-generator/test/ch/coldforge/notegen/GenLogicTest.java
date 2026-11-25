@@ -94,7 +94,11 @@ public final class GenLogicTest {
         check(GenLogic.layout(0, 64, "AAAB", 0).sectionBeats() == 16 && GenLogic.layout(0, 64, "AAAB", 0).sections() == 4, "16 bars: four 4-bar sections");
         check(GenLogic.layout(0, 32, "AAAB", 0).sectionBeats() == 8, "8 bars: 2-bar sections");
         check(GenLogic.layout(0, 16, "AAAB", 0).sectionBeats() == 4, "4 bars: 1-bar sections");
-        check(GenLogic.layout(0, 8, "ABCD", 0).sections() == 2, "2 bars: two sections");
+        check(GenLogic.layout(0, 8, "ABCD", 0).sections() == 4 && GenLogic.layout(0, 8, "ABCD", 0).sectionBeats() == 2, "2 bars: four half-bar sections");
+        check(GenLogic.layout(0, 4, "AAAB", 0).sectionBeats() == 1, "1 bar: one beat each");
+        check(GenLogic.layout(0, 48, "AAAB", 0).sectionBeats() == 12, "12 bars: 3 bars each");
+        check(java.util.Arrays.equals(GenLogic.layout(0, 20, "AAAB", 0).letters(), new int[] {0, 0, 0, 1, 0}), "5 bars: one bar each, the form starts again");
+        check(GenLogic.layout(0, 24, "AAAB", 0).sectionBeats() == 4, "6 bars: one bar each");
         check(GenLogic.layout(0, 64, "ABAC", 8).sections() == 8, "fixed 2-bar sections");
         check(java.util.Arrays.equals(GenLogic.layout(0, 32, "ABAC", 4).letters(), new int[] {0, 1, 0, 2, 0, 1, 0, 2}), "the form starts again");
 

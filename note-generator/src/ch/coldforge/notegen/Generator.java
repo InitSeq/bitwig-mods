@@ -28,8 +28,6 @@ final class Generator {
     static final int MELODY = 1;
     static final String[] MODES = {"Chords", "Melody"};
     static final String[] FORM_LABELS = new String[GenLogic.FORMS.length];
-    static final String[] SECTIONS = {"Auto", "1 bar", "2 bars", "4 bars"};
-    private static final double[] SECTION_BEATS = {0, 4, 8, 16};
     static final String[] CHORD_LENGTHS = {"1/2 bar", "1 bar", "2 bars"};
     private static final double[] CHORD_BEATS = {2, 4, 8};
     static final String[] CHORD_TYPES = {"Triads", "Sevenths"};
@@ -57,7 +55,6 @@ final class Generator {
     // The settings.
     static int mode = CHORDS;
     static int form = 1; // A A A B
-    static int section = 0;
     static int chordLength = 1;
     static int chordType = 0;
     static int rhythm = GenLogic.HOLD;
@@ -72,7 +69,8 @@ final class Generator {
 
     /** The notes each mode last wrote (Bitwig's note objects), so "Replace mine" can take them out again. */
     private static final List<List<WeakReference<Object>>> mine = List.of(new ArrayList<>(), new ArrayList<>());
-    private static String logged = "";
+    /** The same notes by key and time, for when Undo and Redo have made new note objects of them. */
+    private static final List<List<double[]>> mineByPlace = List.of(new ArrayList<>(), new ArrayList<>());
 
     private Generator() {
     }
@@ -84,13 +82,40 @@ final class Generator {
             return "No note clip open";
         }
         double[] span = span(open);
-        return (span[0] > open.start() + 1e-6 || span[1] < open.end() - 1e-6 ? "Time selection, " : "Whole clip, ") + bars(span[1] - span[0]);
+        return (range == 0 && selection(open) != null ? "Time selection, " : "Whole clip, ") + bars(span[1] - span[0]);
+    }
+
+    /** How the form falls on the range now, for the dialog: "A A A B, 1 bar each". */
+    static String partsText() {
+        DetailEditor.Open open = DetailEditor.open();
+        if (open == null) {
+            return "";
+        }
+        double[] span = span(open);
+        GenLogic.Layout layout = GenLogic.layout(span[0], span[1], GenLogic.FORMS[form], 0);
+        StringBuilder letters = new StringBuilder();
+        for (int i = 0; i < Math.min(layout.sections(), 8); i++) {
+            letters.append((char) ('A' + layout.letters()[i])).append(' ');
+        }
+        if (layout.sections() > 8) {
+            letters.append("… ");
+        }
+        return letters + "· " + length(layout.sectionBeats()) + " each";
     }
 
     /** Whether the open clip has a time selection to write over. */
     static boolean hasSelection() {
         DetailEditor.Open open = DetailEditor.open();
         return open != null && selection(open) != null;
+    }
+
+    /** A length in bars, or in beats when it is shorter than a bar. */
+    private static String length(double beats) {
+        if (beats >= 4 - 1e-9) {
+            return bars(beats);
+        }
+        String number = Math.abs(beats - Math.rint(beats)) < 1e-6 ? String.valueOf((long) Math.rint(beats)) : String.format("%.2f", beats);
+        return number + (number.equals("1") ? " beat" : " beats");
     }
 
     private static String bars(double beats) {
@@ -136,12 +161,10 @@ final class Generator {
         double[] span = span(open);
         double start = span[0];
         double end = span[1];
-        String ranges = "clip " + open.start() + " to " + open.end() + ", time selection "
-                + (open.selected() ? open.selectionStart() + " to " + open.selectionEnd() : "none") + ", writing " + start + " to " + end;
-        if (!ranges.equals(logged)) { // when they change: what the ranges look like, for finding a wrong place
-            logged = ranges;
-            MOD.log(ranges);
-        }
+        // For finding a wrong place or a wrong setting afterwards: everything this Generate went by.
+        MOD.log("clip " + open.start() + ".." + open.end() + ", writing " + start + ".." + end + ", " + MODES[mode] + ", form "
+                + GenLogic.FORMS[form] + ", parts " + partsText() + ", rate " + RATES[rate] + ", density " + DENSITIES[density]
+                + ", glide " + GLIDES[glide] + ", existing " + EXISTING[existing] + ", seed " + seed + "; time selection: " + open.found());
         List<Note> there = clip.notesBetween(start, end);
         List<Note> leaving = new ArrayList<>();
         for (Note note : there) {
@@ -152,7 +175,7 @@ final class Generator {
         GenLogic.Scale scale = scaleAt(clip, start);
         int centre = CENTRES[register[mode]];
         String letters = GenLogic.FORMS[form];
-        double sectionBeats = SECTION_BEATS[section];
+        double sectionBeats = 0; // the form divides the range
 
         List<GenLogic.Out> notes;
         if (mode == CHORDS) {
@@ -191,11 +214,21 @@ final class Generator {
                 kept.add(new WeakReference<>(note.bitwigNote()));
             }
         }
+        List<double[]> places = mineByPlace.get(mode);
+        places.removeIf(place -> place[1] > start - 1e-6 && place[1] < end - 1e-6); // those in the range were replaced
+        for (GenLogic.Out out : notes) {
+            places.add(new double[] {out.key(), out.start(), out.start() + out.duration()});
+        }
     }
 
     private static boolean isMine(Note note) {
         for (WeakReference<Object> kept : mine.get(mode)) {
             if (kept.get() == note.bitwigNote()) {
+                return true;
+            }
+        }
+        for (double[] place : mineByPlace.get(mode)) {
+            if (place[0] == note.key() && Math.abs(place[1] - note.start()) < 1e-6 && Math.abs(place[2] - note.end()) < 1e-6) {
                 return true;
             }
         }

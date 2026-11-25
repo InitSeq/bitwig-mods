@@ -32,7 +32,10 @@ import java.lang.ref.WeakReference;
 public final class DetailEditor {
     private static final Bml.Mod MOD = Bml.mod("note-generator");
     private static volatile WeakReference<aNi> panel = new WeakReference<>(null);
-    private static volatile WeakReference<tJQ> time = new WeakReference<>(null); // the time selection last made or used
+    // The time selection can be found in three places; the first that holds one inside the clip is used.
+    private static volatile WeakReference<tJQ> clicked = new WeakReference<>(null); // what the right-click menu was opened on
+    private static volatile WeakReference<tJQ> made = new WeakReference<>(null); // the one whose ends were last set
+    private static volatile String clickedOn = "nothing";
 
     private DetailEditor() {
     }
@@ -41,7 +44,8 @@ public final class DetailEditor {
      * A note clip and its time range, in the clip's beats; and the editor's time selection, when it has one
      * (selected).
      */
-    record Open(Clip clip, double start, double end, boolean selected, double selectionStart, double selectionEnd) {
+    record Open(Clip clip, double start, double end, boolean selected, double selectionStart, double selectionEnd,
+                String found) {
     }
 
     /** Bitwig sets up a Detail Editor panel: remembered, the newest one wins. */
@@ -53,24 +57,43 @@ public final class DetailEditor {
     /** A time selection's start is set: it is the one last made. */
     @Hook(target = QCB.class, method = "unz(D)V", at = At.ENTRY, id = "time-selection-start")
     public static void timeStart(@This QCB range) {
-        time = new WeakReference<>(range);
+        made = new WeakReference<>(range);
     }
 
     /** A time selection's end is set. */
     @Hook(target = QCB.class, method = "Anf(D)V", at = At.ENTRY, id = "time-selection-end")
     public static void timeEnd(@This QCB range) {
-        time = new WeakReference<>(range);
+        made = new WeakReference<>(range);
     }
 
     /** The selection a right-click menu was opened on: when it is a time selection, it is the one to use. */
     static void menuOpenedOn(Object bitwigSelection) {
         try {
-            if (bitwigSelection instanceof bjt selection && selection.BBg() instanceof tJQ range) { // BBg: its range
-                time = new WeakReference<>(range);
-            }
+            Object model = bitwigSelection instanceof bjt selection ? selection.BBg() : null; // BBg: what it selects
+            clicked = new WeakReference<>(model instanceof tJQ range ? range : null);
+            clickedOn = bitwigSelection == null ? "nothing"
+                    : bitwigSelection.getClass().getName() + "/" + (model != null ? model.getClass().getName() : "none");
         } catch (RuntimeException | LinkageError e) {
             MOD.log("the time selection can't be read from the menu", e);
         }
+    }
+
+    /** A time selection's two ends, in order; null when it is empty or can't be read. */
+    private static double[] ends(tJQ range) {
+        try {
+            if (range == null) {
+                return null;
+            }
+            double from = Math.min(range.scr(), range.ZRB());
+            double to = Math.max(range.scr(), range.ZRB());
+            return Double.isFinite(from) && Double.isFinite(to) && to - from > 1e-6 ? new double[] {from, to} : null;
+        } catch (RuntimeException | LinkageError | AssertionError e) {
+            return null;
+        }
+    }
+
+    private static String text(double[] ends) {
+        return ends == null ? "none" : ends[0] + ".." + ends[1];
     }
 
     /**
@@ -152,20 +175,30 @@ public final class DetailEditor {
             }
             double start = clip.dC_();
             double end = clip.GwM();
-            Clip found = PianoRoll.clip(clip);
-            if (found == null || !Double.isFinite(start) || !Double.isFinite(end) || !(end > start)) {
+            Clip clipOf = PianoRoll.clip(clip);
+            if (clipOf == null || !Double.isFinite(start) || !Double.isFinite(end) || !(end > start)) {
                 return null;
             }
-            boolean selected = false;
-            double from = 0;
-            double to = 0;
-            tJQ range = time.get();
-            if (range != null) {
-                from = Math.min(range.scr(), range.ZRB()); // its two ends
-                to = Math.max(range.scr(), range.ZRB());
-                selected = Double.isFinite(from) && Double.isFinite(to) && to - from > 1e-6;
+            double[] fromMenu = ends(clicked.get());
+            double[] lastMade = ends(made.get());
+            double[] ofEditor = null;
+            try {
+                bjt own = editor.ckt(); // the editor's own time selection
+                ofEditor = own != null && own.BBg() instanceof tJQ range ? ends(range) : null;
+            } catch (RuntimeException | LinkageError e) {
+                // an editor without one
             }
-            return new Open(found, start, end, selected, from, to);
+            double[] chosen = null;
+            for (double[] candidate : new double[][] {fromMenu, lastMade, ofEditor}) {
+                if (candidate != null && Math.min(end, candidate[1]) - Math.max(start, candidate[0]) > 1e-6) {
+                    chosen = candidate; // the first that lies in the clip
+                    break;
+                }
+            }
+            String found = "menu " + text(fromMenu) + " (" + clickedOn + "), last made " + text(lastMade) + ", editor "
+                    + text(ofEditor) + ", time-selection mode " + editor.unz();
+            return new Open(clipOf, start, end, chosen != null, chosen != null ? chosen[0] : 0,
+                    chosen != null ? chosen[1] : 0, found);
         } catch (RuntimeException | LinkageError e) {
             MOD.log("the Detail Editor's clip can't be read", e);
             return null;

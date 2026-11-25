@@ -28,7 +28,7 @@ final class GeneratorDialog extends dvv {
                         Generator::hasSelection).row(),
                 Rows.choice(rows, "Mode", Generator.MODES, () -> Generator.mode, value -> Generator.mode = value).row(),
                 Rows.choice(rows, "Form", Generator.FORM_LABELS, () -> Generator.form, value -> Generator.form = value).row(),
-                Rows.choice(rows, "Section", Generator.SECTIONS, () -> Generator.section, value -> Generator.section = value).row(),
+                Rows.text(rows, "Parts", Generator::partsText),
                 Rows.choice(rows, "Register", Generator.REGISTERS, () -> Generator.register[Generator.mode],
                         value -> Generator.register[Generator.mode] = value).row(),
                 // Chords.
