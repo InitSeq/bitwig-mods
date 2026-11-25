@@ -4,9 +4,9 @@
     "id": "note-generator",
     "name": "Piano Roll: Note Generator",
     "area": "Piano Roll",
-    "version": "0.3.0-dev.1",
+    "version": "0.4.0-dev.1",
     "author": "Coldforge",
-    "description": "Generates chords or a melody in the project's key, laid out in a form such as A A A B. One click on its button beside the piano keys fills the clip; a block in the Inspector holds the settings, with a preview you can hear",
+    "description": "Generates chords or a melody in the project's key, laid out in a form such as A A A B. Make a time selection in a clip's note editor (or none, for the whole clip), then choose Generate Notes\u2026 from the right-click menu or the button beside the piano keys, and pick the options in a dialog",
     "documentation": "readme"
   },
   "built_against": {
@@ -18,6 +18,10 @@
     {
       "id": "piano-roll-framework",
       "min_version": "0.2.0-dev.1"
+    },
+    {
+      "id": "action-menu-composition-framework",
+      "min_version": "0.9.0-dev.4"
     },
     {
       "id": "inspector-composition-framework",
@@ -37,9 +41,9 @@
   },
   "registrations": [
     {
-      "id": "inspector",
-      "consumer": "inspector-composition-framework",
-      "descriptor": "inspector-blocks.properties",
+      "id": "actions",
+      "consumer": "action-menu-composition-framework",
+      "descriptor": "actions.properties",
       "jar": "helper.jar"
     }
   ],
@@ -67,6 +71,12 @@
       "owner": "dBY",
       "name": "beI",
       "descriptor": "(LejM;)V"
+    },
+    "dvv.init": {
+      "kind": "method",
+      "owner": "dvv",
+      "name": "<init>",
+      "descriptor": "()V"
     }
   },
   "hooks": [
@@ -99,6 +109,7 @@
   },
   "opens": [
     "aJI.Anf",
-    "dBY.beI"
+    "dBY.beI",
+    "dvv.init"
   ]
 }

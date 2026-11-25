@@ -21,7 +21,7 @@ JDK="${JDK:-/opt/homebrew/opt/openjdk/bin}"
 [ -x "$JDK/javac" ] || JDK="$(dirname "$(command -v javac)")"
 
 DEPS=""
-for framework in piano-roll-framework inspector-composition-framework notifications-framework; do
+for framework in piano-roll-framework action-menu-composition-framework inspector-composition-framework notifications-framework; do
     jar="$BML/mods/$framework/helper.jar"
     [ -f "$jar" ] || { echo "Missing $jar" >&2; exit 1; }
     DEPS="$DEPS:$jar"

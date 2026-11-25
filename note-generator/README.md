@@ -1,40 +1,38 @@
 # Piano Roll: Note Generator
 
-Generates **chords** or a **melody** in the project's key, laid out in a form such as A A A B, from a block in the Inspector. You see and hear the result before you apply it.
+Generates **chords** or a **melody** in the project's key, laid out in a form such as A A A B. You say where with a time selection and how in a dialog.
 
 - Mod ID: `note-generator`
-- Needs Framework: Piano Roll, Framework: Inspector and Framework: Notifications (all ship with Patchbay).
+- Needs Framework: Piano Roll, Framework: Actions and Menus, Framework: Inspector and Framework: Notifications (all ship with Patchbay).
 - Built against Bitwig Studio 6.1.7 on macOS: the hooks that find the clip in the Detail Editor and add the button use that build's names.
 - Status: prototype.
 
 ## Use it
 
-**One click:** open a note clip in the Detail Editor. In the strip beside the piano keys, below the editor mode buttons, click the note icon (**Generate Notes**). It fills the whole clip with the current settings and a new seed, as one Undo step. Click again for other notes: by default it replaces only what it wrote before.
+1. Open a note clip in the Detail Editor. Drag a **time selection** over the bars to fill; with none, the whole clip is filled.
+2. Open **Generate Notes…**: right-click the time selection (or a note), or click the note icon in the strip beside the piano keys, below the editor mode buttons. It is also in the Commander and can have a key (Settings > Shortcuts, category Note Generator).
+3. Pick the options in the dialog and click **Generate**. The notes are written at once, as one Undo step.
+4. Click **Generate** again for other notes: by default it replaces only what it wrote before. The dialog stays open, so with the clip playing you hear each variation. **Cancel** closes it.
 
-**With settings and preview:** the **Note Generator** block is in the Inspector of a selected note, clip or track.
+**Generate Notes Again** (right-click menu, Commander, shortcut) writes other notes with the last settings, without the dialog.
 
-1. Pick a **Mode** and a **Form**, change any row or click **Dice**. The result appears as preview notes and plays in place of the clip's notes.
-2. Click **Dice** until you like it, then **Apply**. It is one Undo step.
-
-| Row | What it does |
+| Option | What it does |
 |---|---|
+| Where | Shows what will be filled: the time selection or the whole clip, and how long it is |
+| Range | **Time selection** (when there is one) or **Whole clip** |
 | Mode | **Chords** or **Melody** |
 | Form | The order of the sections: A A A A, A A A B, A A B A, A A B B, A B A B, A B A C, A B C B or A B C D. The same letter is the same chords or the same motif again |
 | Section | How long one letter is. **Auto**: a quarter of the range, so the form fits once (16 bars: 4 bars each). Or 1, 2 or 4 bars; a longer range starts the form again |
-| Length (Chords) | One chord every half bar, bar or two bars |
+| Register | Low, Mid or High (around C2, C3, C4) |
+| Chord every (Chords) | Half a bar, a bar or two bars |
 | Chords (Chords) | Triads or seventh chords |
 | Rhythm (Chords) | **Hold**, **Pulse** (every beat), **Offbeat** (bass on the beat, chord between) or **3-3-2** |
 | Bass (Chords) | Adds the chord's root below |
 | Rate (Melody) | The grid the melody moves on: 1/4, 1/8 or 1/16 |
-| Density (Melody) | Few notes, some, or many |
-| Register | Low, Mid or High (around C2, C3, C4) |
-| Existing | **Replace mine**: takes out what this mode last generated and leaves everything else. **Replace all**: takes out every note in the range. **Keep**: adds to what is there |
-| Range | **Clip**: the whole clip open in the Detail Editor. **Selection**: from the first selected note's start to the last one's end |
-| Seed | The number behind the result: the same seed and settings give the same notes |
-| Dice | A new seed |
-| Apply | Writes the notes |
+| Density (Melody) | Sparse, Medium or Busy |
+| Existing | **Replace mine**: takes out what this mode last generated in the range and leaves everything else. **Replace all**: takes out every note in the range. **Keep**: adds to what is there |
 
-A form needs room: with four sections of one bar each, a clip should be at least four bars long.
+A form needs room: with four sections of one bar each, the range should be at least four bars long.
 
 ## What it generates
 

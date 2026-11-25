@@ -5,6 +5,7 @@ import bitwig.obf.DrA; // a note clip
 import bitwig.obf.NdS; // the Drum/Hybrid editor mode
 import bitwig.obf.aJI; // the Detail Editor's mode button (Drum/Hybrid), in the strip beside the piano keys
 import bitwig.obf.aNi; // the Detail Editor panel
+import bitwig.obf.bjv; // an editor's time selection
 import bitwig.obf.bke; // the Detail Editor's controller
 import bitwig.obf.bpF; // a clip's note editor layer
 import bitwig.obf.cjx; // a fixed widget size
@@ -33,8 +34,11 @@ public final class DetailEditor {
     private DetailEditor() {
     }
 
-    /** A note clip and its time range, in the clip's beats. */
-    record Open(Clip clip, double start, double end) {
+    /**
+     * A note clip and its time range, in the clip's beats; and the editor's time selection, when it has one
+     * (selected).
+     */
+    record Open(Clip clip, double start, double end, boolean selected, double selectionStart, double selectionEnd) {
     }
 
     /** Bitwig sets up a Detail Editor panel: remembered, the newest one wins. */
@@ -44,8 +48,8 @@ public final class DetailEditor {
     }
 
     /**
-     * Bitwig built a button of the mode strip: beside the Drum/Hybrid button goes the mod's own, which generates
-     * notes in one click. Other mods add theirs the same way (Scale Fold, Step Sequencer), so it goes into the column
+     * Bitwig built a button of the mode strip: beside the Drum/Hybrid button goes the mod's own, which opens the
+     * Generate Notes dialog. Other mods add theirs the same way (Scale Fold, Step Sequencer), so it goes into the column
      * they made when there is one.
      */
     @Hook(target = WRA.class, method = "beI(Lbke;LJtD;)LdwF;", at = At.WRAP_RETURN, id = "mode-strip-button")
@@ -67,11 +71,11 @@ public final class DetailEditor {
             button.beI(modeButton.jl_().iOJ().beI("Borderless")); // the strip's button style from the theme
             button.Bqk(0.5f);
             button.byf("8th note.svg"); // one of Bitwig's icons
-            button.zzi("Generate Notes");
+            button.zzi("Generate Notes…");
             button.sCA(zfc.beI());
             button.sCA(() -> PianoRoll.later(() -> { // once Bitwig has finished handling the click
                 pressed.setBoolValue(false);
-                NoteGeneratorUi.generateNow();
+                GeneratorDialog.show(button);
             }));
             button.Gef(new cjx(22L));
 
@@ -126,7 +130,16 @@ public final class DetailEditor {
             if (found == null || !Double.isFinite(start) || !Double.isFinite(end) || !(end > start)) {
                 return null;
             }
-            return new Open(found, start, end);
+            boolean selected = false;
+            double from = 0;
+            double to = 0;
+            if (editor.unz()) { // the editor has a time selection
+                bjv time = editor.ckt();
+                from = Math.min(time.ymo(), time.wGt()); // its two ends
+                to = Math.max(time.ymo(), time.wGt());
+                selected = Double.isFinite(from) && Double.isFinite(to) && to - from > 1e-6;
+            }
+            return new Open(found, start, end, selected, from, to);
         } catch (RuntimeException | LinkageError e) {
             MOD.log("the Detail Editor's clip can't be read", e);
             return null;
