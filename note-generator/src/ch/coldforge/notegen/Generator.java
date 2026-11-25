@@ -45,6 +45,8 @@ final class Generator {
     private static final int REPLACE_MINE = 0;
     private static final int REPLACE_ALL = 1;
     static final String[] RANGES = {"Time selection", "Whole clip"};
+    static final String[] GLIDES = {"Off", "Some", "Many"};
+    private static final int[] GLIDE_PERCENT = {0, 30, 65};
 
     static {
         for (int i = 0; i < FORM_LABELS.length; i++) {
@@ -62,6 +64,7 @@ final class Generator {
     static int bass = 1;
     static int rate = 2;
     static int density = 1;
+    static int glide = 0;
     static final int[] register = {1, 2}; // per mode: chords in the middle, a melody above them
     static int existing = REPLACE_MINE;
     static int range = 0;
@@ -69,7 +72,7 @@ final class Generator {
 
     /** The notes each mode last wrote (Bitwig's note objects), so "Replace mine" can take them out again. */
     private static final List<List<WeakReference<Object>>> mine = List.of(new ArrayList<>(), new ArrayList<>());
-    private static boolean logged;
+    private static String logged = "";
 
     private Generator() {
     }
@@ -133,10 +136,11 @@ final class Generator {
         double[] span = span(open);
         double start = span[0];
         double end = span[1];
-        if (!logged) { // once per Bitwig start: what the ranges look like, for finding a wrong place
-            logged = true;
-            MOD.log("clip " + open.start() + " to " + open.end() + ", time selection "
-                    + (open.selected() ? open.selectionStart() + " to " + open.selectionEnd() : "none") + ", writing " + start + " to " + end);
+        String ranges = "clip " + open.start() + " to " + open.end() + ", time selection "
+                + (open.selected() ? open.selectionStart() + " to " + open.selectionEnd() : "none") + ", writing " + start + " to " + end;
+        if (!ranges.equals(logged)) { // when they change: what the ranges look like, for finding a wrong place
+            logged = ranges;
+            MOD.log(ranges);
         }
         List<Note> there = clip.notesBetween(start, end);
         List<Note> leaving = new ArrayList<>();
@@ -162,7 +166,7 @@ final class Generator {
                 }
             }
             notes = GenLogic.melody(scale, start, end, RATE_BEATS[rate], DENSITY_PERCENT[density], centre, harmony, letters,
-                    sectionBeats, seed);
+                    sectionBeats, GLIDE_PERCENT[glide], seed);
         }
         if (notes.isEmpty()) {
             throw new Refused("the range is too short");

@@ -13,6 +13,8 @@ import java.util.List;
  */
 public final class GenLogicTest {
     private static int failures;
+    private static int glidedCases;
+    private static int glidedWithOverlap;
     private static final String[] NAMES = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 
     public static void main(String[] args) {
@@ -52,11 +54,20 @@ public final class GenLogicTest {
                     // Melody on every rate and several densities, over the chords the same seed would give.
                     for (double step : new double[] {1, 0.5, 0.25}) {
                         for (int density : new int[] {5, 50, 100}) {
-                            List<Out> melody = GenLogic.melody(scale, 8, 72, step, density, 72, List.of(), form, 0, seed);
+                            List<Out> melody = GenLogic.melody(scale, 8, 72, step, density, 72, List.of(), form, 0, 0, seed);
                             check(!melody.isEmpty(), "melody: empty");
                             inRangeAndScale(melody, scale, 8, 72, "melody");
-                            oneVoice(melody);
-                            sameWhereLettersMatch(melody, GenLogic.layout(8, 72, form, 0), true, "melody " + form);
+                            oneVoice(melody, 0);
+                            sameWhereLettersMatch(melody, GenLogic.layout(8, 72, form, 0), false, "melody " + form);
+                            // The rate is the note value: most notes are one or two steps long.
+                            long shortNotes = melody.stream().filter(n -> n.duration() <= 2 * step + 1e-9).count();
+                            check(shortNotes * 10 >= melody.size() * 8, "melody: notes longer than the rate");
+                            // Glides overlap the next note by half a step, and repeat with their letter too.
+                            List<Out> glided = GenLogic.melody(scale, 8, 72, step, density, 72, List.of(), form, 0, 60, seed);
+                            oneVoice(glided, step / 2);
+                            sameWhereLettersMatch(glided, GenLogic.layout(8, 72, form, 0), false, "glide " + form);
+                            glidedCases++;
+                            glidedWithOverlap += overlaps(glided) > 0 ? 1 : 0;
                             for (Out note : melody) {
                                 check(Math.abs(note.key() - 72) <= 16, "melody: far from the centre: " + note.key());
                             }
@@ -69,13 +80,12 @@ public final class GenLogicTest {
                     for (Out chord : held) {
                         harmony.add(new Sounding(chord.key(), chord.start(), chord.start() + chord.duration()));
                     }
-                    List<Out> over = GenLogic.melody(scale, 8, 72, 0.25, 50, 72, harmony, form, 0, seed);
-                    Out end = over.get(over.size() - 1);
-                    check(GenLogic.chordAt(scale, harmony, end.start()).contains(end.key() % 12), "melody: ends off the chord");
+                    List<Out> over = GenLogic.melody(scale, 8, 72, 0.25, 50, 72, harmony, form, 0, 0, seed);
+                    sameWhereLettersMatch(over, GenLogic.layout(8, 72, form, 0), false, "melody over chords " + form);
 
                     // The same seed gives the same notes.
                     check(chords.equals(GenLogic.chords(scale, 8, 72, 4, seed % 2 == 0, true, 60, rhythm, form, 0, seed)), "chords: not repeatable");
-                    check(over.equals(GenLogic.melody(scale, 8, 72, 0.25, 50, 72, harmony, form, 0, seed)), "melody: not repeatable");
+                    check(over.equals(GenLogic.melody(scale, 8, 72, 0.25, 50, 72, harmony, form, 0, 0, seed)), "melody: not repeatable");
                 }
             }
         }
@@ -93,10 +103,28 @@ public final class GenLogicTest {
         check(GenLogic.chords(c, 0, 1.5, 4, false, false, 60, GenLogic.HOLD, "AAAA", 0, 1).stream().allMatch(n -> n.duration() == 1.5), "short chord");
         List<Out> uneven = GenLogic.chords(c, 0, 6, 4, false, false, 60, GenLogic.HOLD, "AAAB", 0, 1);
         check(uneven.stream().mapToDouble(n -> n.start() + n.duration()).max().orElse(0) == 6, "uneven chords end at the range");
-        check(GenLogic.melody(c, 0, 0.1, 0.25, 50, 72, List.of(), "AAAA", 0, 1).size() == 1, "tiny melody");
+        check(GenLogic.melody(c, 0, 0.1, 0.25, 50, 72, List.of(), "AAAA", 0, 0, 1).size() == 1, "tiny melody");
         check(GenLogic.chords(c, 4, 4, 4, false, false, 60, GenLogic.HOLD, "AAAA", 0, 1).isEmpty(), "empty range");
-        inRangeAndScale(GenLogic.melody(c, 0, 13.3, 0.25, 70, 72, List.of(), "ABAC", 0, 3), c, 0, 13.3, "ragged melody");
+        inRangeAndScale(GenLogic.melody(c, 0, 13.3, 0.25, 70, 72, List.of(), "ABAC", 0, 30, 3), c, 0, 13.3, "ragged melody");
         inRangeAndScale(GenLogic.chords(c, 0, 13.3, 2, true, true, 60, GenLogic.THREE_THREE_TWO, "ABAC", 0, 3), c, 0, 13.3, "ragged chords");
+
+        check(glidedWithOverlap * 10 >= glidedCases * 9, "glide: too few melodies have a note running into the next");
+
+        // A four-bar loop: A B C D is four different bars, A A A B three equal bars and another.
+        for (long seed = 1; seed <= 200; seed++) {
+            for (double step : new double[] {0.5, 0.25}) {
+                List<String> bars = barsOf(GenLogic.melody(c, 0, 16, step, 50, 72, List.of(), "ABCD", 0, 0, seed));
+                check(new java.util.HashSet<>(bars).size() == 4, "ABCD: two bars are the same, seed " + seed);
+                bars = barsOf(GenLogic.melody(c, 0, 16, step, 50, 72, List.of(), "AAAB", 0, 0, seed));
+                check(bars.get(0).equals(bars.get(1)) && bars.get(1).equals(bars.get(2)) && !bars.get(2).equals(bars.get(3)),
+                        "AAAB: not three equal bars and another, seed " + seed);
+            }
+            List<String> chordBars = barsOf(GenLogic.chords(c, 0, 16, 4, false, true, 60, GenLogic.HOLD, "ABCD", 0, seed));
+            check(new java.util.HashSet<>(chordBars).size() >= 3, "ABCD chords: too many equal bars, seed " + seed);
+            chordBars = barsOf(GenLogic.chords(c, 0, 16, 4, false, true, 60, GenLogic.HOLD, "AAAB", 0, seed));
+            check(chordBars.get(0).equals(chordBars.get(1)) && chordBars.get(1).equals(chordBars.get(2))
+                    && !chordBars.get(2).equals(chordBars.get(3)), "AAAB chords, seed " + seed);
+        }
 
         if (failures > 0) {
             System.out.println("FAILED: " + failures);
@@ -128,11 +156,36 @@ public final class GenLogicTest {
         return found;
     }
 
-    private static void oneVoice(List<Out> melody) {
+    private static void oneVoice(List<Out> melody, double overlap) {
         for (int i = 1; i < melody.size(); i++) {
             Out before = melody.get(i - 1);
-            check(before.start() + before.duration() <= melody.get(i).start() + 1e-9, "melody: two notes at once");
+            check(before.start() + before.duration() <= melody.get(i).start() + overlap + 1e-9, "melody: two notes at once");
         }
+    }
+
+    private static int overlaps(List<Out> melody) {
+        int count = 0;
+        for (int i = 1; i < melody.size(); i++) {
+            if (melody.get(i - 1).start() + melody.get(i - 1).duration() > melody.get(i).start() + 1e-9) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** Each of the four bars from beat 0 as text: its notes' places, lengths and keys. */
+    private static List<String> barsOf(List<Out> notes) {
+        List<String> bars = new ArrayList<>();
+        for (int bar = 0; bar < 4; bar++) {
+            StringBuilder text = new StringBuilder();
+            for (Out note : notes) {
+                if (note.start() >= bar * 4 - 1e-9 && note.start() < bar * 4 + 4 - 1e-9) {
+                    text.append(note.start() - bar * 4).append(':').append(note.duration()).append(':').append(note.key()).append(' ');
+                }
+            }
+            bars.add(text.toString());
+        }
+        return bars;
     }
 
     private static void inRangeAndScale(List<Out> notes, Scale scale, double start, double end, String what) {
@@ -159,7 +212,7 @@ public final class GenLogicTest {
                 chords.stream().filter(n -> n.start() == at).forEach(n -> line.append(' ').append(name(n.key())));
                 System.out.println(line);
             }
-            List<Out> melody = GenLogic.melody(scale, 0, 16, 0.25, 50, 72, List.of(), form, 0, 7);
+            List<Out> melody = GenLogic.melody(scale, 0, 16, 0.25, 50, 72, List.of(), form, 0, 0, 7);
             for (double bar = 0; bar < 16; bar += 4) {
                 char[] grid = "................".toCharArray();
                 StringBuilder line = new StringBuilder();

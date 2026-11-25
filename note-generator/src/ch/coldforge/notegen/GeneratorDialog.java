@@ -45,6 +45,8 @@ final class GeneratorDialog extends dvv {
                         GeneratorDialog::melody).row(),
                 Rows.choice(rows, "Density", Generator.DENSITIES, () -> Generator.density, value -> Generator.density = value,
                         GeneratorDialog::melody).row(),
+                Rows.choice(rows, "Glide", Generator.GLIDES, () -> Generator.glide, value -> Generator.glide = value,
+                        GeneratorDialog::melody).row(),
                 Rows.choice(rows, "Existing", Generator.EXISTING, () -> Generator.existing, value -> Generator.existing = value).row(),
                 Rows.button(rows, "Generate", this::generate));
         BBg((dwF) body); // the dialog's content

@@ -28,10 +28,16 @@ public final class GeneratorActions implements ActionProvider {
                .menuLabel("Generate Notes…")
                .category("note_generator")
                .in(menus)
-               .onRun(context -> GeneratorDialog.show(context.widget()));
+               .onRun(context -> {
+                   DetailEditor.menuOpenedOn(context.selection());
+                   GeneratorDialog.show(context.widget());
+               });
         actions.action("note_generator_again", "Generate Notes Again")
                .category("note_generator")
                .in(menus)
-               .onRun(context -> Generator.generate());
+               .onRun(context -> {
+                   DetailEditor.menuOpenedOn(context.selection());
+                   Generator.generate();
+               });
     }
 }

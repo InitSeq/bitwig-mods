@@ -4,7 +4,7 @@ Mods for Bitwig Studio, loaded with [Patchbay](https://github.com/shaboogen-dev/
 
 | Mod | Download |
 |---|---|
-| Piano Roll: Note Generator | `note-generator-0.4.0-dev.1.zip` |
+| Piano Roll: Note Generator | `note-generator-0.5.0-dev.1.zip` |
 
 Get the ZIPs from [Releases](../../releases) and add them in Patchbay with **Mods → Add Mod…**, or add this repository as a mod source in Patchbay Launcher.
 

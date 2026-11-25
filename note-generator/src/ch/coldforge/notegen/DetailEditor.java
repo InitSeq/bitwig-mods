@@ -5,7 +5,9 @@ import bitwig.obf.DrA; // a note clip
 import bitwig.obf.NdS; // the Drum/Hybrid editor mode
 import bitwig.obf.aJI; // the Detail Editor's mode button (Drum/Hybrid), in the strip beside the piano keys
 import bitwig.obf.aNi; // the Detail Editor panel
-import bitwig.obf.bjv; // an editor's time selection
+import bitwig.obf.QCB; // a time selection's range, as Bitwig keeps it
+import bitwig.obf.bjt; // a time selection in an editor (what its right-click menu is opened on)
+import bitwig.obf.tJQ; // a time selection's range: its two ends
 import bitwig.obf.bke; // the Detail Editor's controller
 import bitwig.obf.bpF; // a clip's note editor layer
 import bitwig.obf.cjx; // a fixed widget size
@@ -30,6 +32,7 @@ import java.lang.ref.WeakReference;
 public final class DetailEditor {
     private static final Bml.Mod MOD = Bml.mod("note-generator");
     private static volatile WeakReference<aNi> panel = new WeakReference<>(null);
+    private static volatile WeakReference<tJQ> time = new WeakReference<>(null); // the time selection last made or used
 
     private DetailEditor() {
     }
@@ -45,6 +48,29 @@ public final class DetailEditor {
     @Hook(target = aNi.class, method = "Gef(LHSH;Lbke;LbaN;)V", at = At.ENTRY, id = "detail-editor-set-up")
     public static void setUp(@This aNi built) {
         panel = new WeakReference<>(built);
+    }
+
+    /** A time selection's start is set: it is the one last made. */
+    @Hook(target = QCB.class, method = "unz(D)V", at = At.ENTRY, id = "time-selection-start")
+    public static void timeStart(@This QCB range) {
+        time = new WeakReference<>(range);
+    }
+
+    /** A time selection's end is set. */
+    @Hook(target = QCB.class, method = "Anf(D)V", at = At.ENTRY, id = "time-selection-end")
+    public static void timeEnd(@This QCB range) {
+        time = new WeakReference<>(range);
+    }
+
+    /** The selection a right-click menu was opened on: when it is a time selection, it is the one to use. */
+    static void menuOpenedOn(Object bitwigSelection) {
+        try {
+            if (bitwigSelection instanceof bjt selection && selection.BBg() instanceof tJQ range) { // BBg: its range
+                time = new WeakReference<>(range);
+            }
+        } catch (RuntimeException | LinkageError e) {
+            MOD.log("the time selection can't be read from the menu", e);
+        }
     }
 
     /**
@@ -133,10 +159,10 @@ public final class DetailEditor {
             boolean selected = false;
             double from = 0;
             double to = 0;
-            if (editor.unz()) { // the editor has a time selection
-                bjv time = editor.ckt();
-                from = Math.min(time.ymo(), time.wGt()); // its two ends
-                to = Math.max(time.ymo(), time.wGt());
+            tJQ range = time.get();
+            if (range != null) {
+                from = Math.min(range.scr(), range.ZRB()); // its two ends
+                to = Math.max(range.scr(), range.ZRB());
                 selected = Double.isFinite(from) && Double.isFinite(to) && to - from > 1e-6;
             }
             return new Open(found, start, end, selected, from, to);

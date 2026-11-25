@@ -325,28 +325,25 @@ final class GenLogic {
 
     // Melody.
 
-    /** Rhythms of eight steps: x starts a note. Few notes, some, many. */
+    /** Rhythms of eight steps: x starts a note. Three of eight steps, five, seven or eight. */
     private static final String[][] CELLS = {
-            {"x.......", "x...x...", "x.....x.", "x..x....", "x....x..", "..x...x."},
-            {"x..x..x.", "x.x...x.", "x...x.x.", "x.x.x...", "x..x.x..", "x.xx..x.", "..x.x.x.", "x..x...x"},
-            {"x.xx.xx.", "xx.x.xx.", "x.x.x.xx", "xxx.x.x.", "x.xxx.x.", "x.x.xx.x", "xx.xx.x."},
+            {"x..x..x.", "x.x...x.", "x...x.x.", "x..x.x..", "x.x..x..", "x..x...x"},
+            {"x.xx.xx.", "xx.x.xx.", "x.x.xx.x", "xxx.x.x.", "x.xxx.x.", "x.xx.x.x", "xx.xx.x."},
+            {"xxxxxxx.", "xxx.xxxx", "xxxxx.xx", "xxxxxxxx", "xx.xxxxx", "xxxx.xxx"},
     };
 
     /** A note of a motif: where it starts in the section, how long it is held, how high above the anchor. */
     private record Tone(int step, int held, int height) {
     }
 
-    /** One letter's motif over a section of this many steps. */
+    /** One letter's motif over a section of this many steps. Its notes are one step long, some tied over a gap. */
     private static List<Tone> motif(int letter, int steps, double density, long seed) {
         Random random = new Random(seed * 1000003 + letter * 7717 + 5);
         // Three rhythm cells, laid out a b a c: the motif repeats itself before it moves on.
+        String[] tier = CELLS[density < 0.34 ? 0 : density < 0.67 ? 1 : 2];
         String[] cells = new String[3];
         for (int i = 0; i < 3; i++) {
-            double[] tiers = {Math.max(0.05, 1 - 2.2 * density), 1 - Math.abs(density - 0.5) * 1.6, Math.max(0.05, 2.2 * density - 1.2)};
-            String[] tier = CELLS[pick(tiers, random)];
-            do {
-                cells[i] = tier[random.nextInt(tier.length)];
-            } while (i == 0 && cells[i].charAt(0) != 'x');
+            cells[i] = tier[random.nextInt(tier.length)];
         }
         List<Integer> onsets = new ArrayList<>();
         for (int step = 0; step < steps; step++) {
@@ -377,19 +374,23 @@ final class GenLogic {
             before = height;
             boolean lastTone = i == onsets.size() - 1;
             int gap = (lastTone ? steps : onsets.get(i + 1)) - step;
-            tones.add(new Tone(step, Math.min(gap, lastTone ? 8 : 4), height));
+            int held = lastTone ? Math.min(gap, 4) : gap > 1 && random.nextDouble() < 0.6 ? 2 : 1;
+            tones.add(new Tone(step, held, height));
         }
         return tones;
     }
 
     /**
-     * A one-voice melody over the range on a grid of step beats, laid out in the form. Each letter is a motif:
-     * a rhythm and a line. Where a letter comes again the motif comes again, with its notes on the beat moved
-     * to the harmony sounding there. Each section ends on a tone of its chord, the last one at rest. With no
-     * harmony given, the melody follows the chords the same seed and form would generate.
+     * A one-voice melody over the range on a grid of step beats, laid out in the form. Each letter is a motif: a
+     * rhythm of notes one step long, and a line. A letter is written once, fitted to the harmony at its first
+     * place, and every later section of that letter is the same notes again, exactly. With no harmony given, the
+     * melody follows the chords the same seed and form would generate.
+     *
+     * glidePercent: how many notes run on into the next one (by half a step), for a synth that glides between
+     * overlapping notes. 0 keeps every note clear of the next.
      */
     static List<Out> melody(Scale scale, double start, double end, double step, int densityPercent, int centre,
-                            List<Sounding> harmony, String form, double sectionBeats, long seed) {
+                            List<Sounding> harmony, String form, double sectionBeats, int glidePercent, long seed) {
         List<Out> out = new ArrayList<>();
         if (!(end - start > 1e-6) || !(step > 0)) {
             return out;
@@ -403,43 +404,55 @@ final class GenLogic {
                 }
             }
         }
-        Random random = new Random(seed * 31 + 7);
         double density = Math.max(1, Math.min(100, densityPercent)) / 100.0;
         int sectionSteps = Math.max(1, (int) Math.round(layout.sectionBeats() / step));
         int[] ladder = scale.ladder();
         int lowest = indexNear(ladder, centre - 14);
         int highest = indexNear(ladder, centre + 14);
-        List<List<Tone>> motifs = new ArrayList<>();
-        for (int letter = 0; letter < 4; letter++) {
-            motifs.add(motif(letter, sectionSteps, density, seed));
-        }
 
+        // Each letter's notes, relative to its section's start: written where the letter first stands.
+        List<List<Out>> written = new ArrayList<>(List.of(List.of(), List.of(), List.of(), List.of()));
+        boolean[] done = new boolean[4];
         for (int section = 0; section < layout.sections(); section++) {
+            int letter = layout.letters()[section];
             double from = layout.from(section);
-            double to = layout.to(section);
-            List<Tone> tones = motifs.get(layout.letters()[section]);
-            int anchor = snap(ladder, indexNear(ladder, centre), chordAt(scale, harmony, from), 4, lowest, highest);
-            int sounding = 0;
-            for (Tone tone : tones) {
-                if (from + tone.step() * step < to - 1e-6) {
-                    sounding++;
+            if (!done[letter]) {
+                done[letter] = true;
+                Random random = new Random(seed * 31 + letter * 131 + 7);
+                List<Tone> tones = motif(letter, sectionSteps, density, seed);
+                int anchor = snap(ladder, indexNear(ladder, centre), chordAt(scale, harmony, from), 4, lowest, highest);
+                boolean closes = section == layout.sections() - 1; // the letter of the last section comes to rest
+                List<Out> notes = new ArrayList<>();
+                for (int i = 0; i < tones.size(); i++) {
+                    Tone tone = tones.get(i);
+                    double time = from + tone.step() * step;
+                    List<Integer> chord = chordAt(scale, harmony, time);
+                    int at = Math.max(lowest, Math.min(highest, anchor + tone.height()));
+                    if (i == tones.size() - 1) {
+                        at = closes ? snap(ladder, at, chord.contains(scale.root) ? List.of(scale.root) : chord, 7, lowest, highest)
+                                : snap(ladder, at, chord, 4, lowest, highest);
+                    } else if (tone.step() % 4 == 0) {
+                        at = snap(ladder, at, chord, 2, lowest, highest);
+                    }
+                    double accent = tone.step() % 8 == 0 ? 0.82 : tone.step() % 4 == 0 ? 0.72 : 0.62;
+                    notes.add(new Out(ladder[at], tone.step() * step, tone.held() * step,
+                            clamp(accent + (random.nextDouble() - 0.5) * 0.08)));
                 }
+                // Glides: a note runs on into the next, when that one is another pitch.
+                for (int i = 0; i + 1 < notes.size(); i++) {
+                    Out note = notes.get(i);
+                    Out next = notes.get(i + 1);
+                    if (next.key() != note.key() && random.nextDouble() * 100 < glidePercent) {
+                        notes.set(i, new Out(note.key(), note.start(), next.start() - note.start() + step / 2, note.velocity()));
+                    }
+                }
+                written.set(letter, notes);
             }
-            for (int i = 0; i < sounding; i++) {
-                Tone tone = tones.get(i);
-                double time = from + tone.step() * step;
-                List<Integer> chord = chordAt(scale, harmony, time);
-                int at = Math.max(lowest, Math.min(highest, anchor + tone.height()));
-                if (i == sounding - 1 && section == layout.sections() - 1) {
-                    at = snap(ladder, at, chord.contains(scale.root) ? List.of(scale.root) : chord, 7, lowest, highest);
-                } else if (i == sounding - 1) {
-                    at = snap(ladder, at, chord, 4, lowest, highest);
-                } else if (tone.step() % 4 == 0) {
-                    at = snap(ladder, at, chord, 2, lowest, highest);
+            double length = layout.to(section) - from;
+            for (Out note : written.get(letter)) {
+                if (note.start() < length - 1e-6) {
+                    out.add(new Out(note.key(), from + note.start(), Math.min(note.duration(), length - note.start()), note.velocity()));
                 }
-                double length = Math.min(tone.held() * step, to - time);
-                double accent = tone.step() % 8 == 0 ? 0.82 : tone.step() % 4 == 0 ? 0.72 : 0.62;
-                out.add(new Out(ladder[at], time, length, clamp(accent + (random.nextDouble() - 0.5) * 0.08)));
             }
         }
         return out;
