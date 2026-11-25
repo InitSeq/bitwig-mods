@@ -4,9 +4,9 @@
     "id": "note-generator",
     "name": "Piano Roll: Note Generator",
     "area": "Piano Roll",
-    "version": "0.2.0-dev.1",
+    "version": "0.3.0-dev.1",
     "author": "Coldforge",
-    "description": "Generates chords or a melody in the project's key, laid out in a form such as A A A B, from a block in the Inspector. Works on the whole clip or on the selected notes' range. See and hear the result before you apply it",
+    "description": "Generates chords or a melody in the project's key, laid out in a form such as A A A B. One click on its button beside the piano keys fills the clip; a block in the Inspector holds the settings, with a preview you can hear",
     "documentation": "readme"
   },
   "built_against": {
@@ -49,6 +49,24 @@
       "owner": "aNi",
       "name": "Gef",
       "descriptor": "(LHSH;Lbke;LbaN;)V"
+    },
+    "com.bitwig.flt.widget.core.timeline.WRA.beI": {
+      "kind": "method",
+      "owner": "com/bitwig/flt/widget/core/timeline/WRA",
+      "name": "beI",
+      "descriptor": "(Lbke;LJtD;)LdwF;"
+    },
+    "aJI.Anf": {
+      "kind": "field",
+      "owner": "aJI",
+      "name": "Anf",
+      "descriptor": "LaNi;"
+    },
+    "dBY.beI": {
+      "kind": "method",
+      "owner": "dBY",
+      "name": "beI",
+      "descriptor": "(LejM;)V"
     }
   },
   "hooks": [
@@ -63,10 +81,24 @@
           "this"
         ]
       }
+    },
+    {
+      "id": "mode-strip-button",
+      "target": "com.bitwig.flt.widget.core.timeline.WRA.beI",
+      "transform": "WRAP_OBJECT_RETURN",
+      "bridge": {
+        "method": "addButton",
+        "descriptor": "(LdwF;)LdwF;",
+        "args": []
+      }
     }
   ],
   "helper": {
     "jar": "helper.jar",
     "class": "ch.coldforge.notegen.DetailEditor"
-  }
+  },
+  "opens": [
+    "aJI.Anf",
+    "dBY.beI"
+  ]
 }

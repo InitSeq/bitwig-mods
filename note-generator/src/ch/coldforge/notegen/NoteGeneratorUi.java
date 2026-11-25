@@ -28,9 +28,9 @@ import java.util.Set;
 /**
  * The Note Generator block in the Note Inspector, its preview and Apply.
  *
- * With notes selected, they mark where to write: the clip, the channel and the time from the first note's start to
- * the last note's end. With none, it writes over the whole clip open in the Detail Editor, from the block in the
- * clip's Inspector. Mode chooses chords or a melody, in Bitwig's key at that place, laid out in a form. Nothing shows until the user
+ * It writes over the whole clip open in the Detail Editor, or (Range: Selection) from the first selected note's
+ * start to the last one's end. Mode chooses chords or a melody, in Bitwig's key at that place, laid out in a form.
+ * The button the mod adds beside the piano keys does Dice and Apply in one click, with the block's settings. Nothing shows until the user
  * changes a row or clicks Dice; then the outcome is drawn as Bitwig's preview notes and plays in place of the
  * clip's notes. Selecting other notes, editing notes, Undo and Redo take the preview away. Apply writes it as one
  * Undo step.
@@ -50,7 +50,10 @@ public final class NoteGeneratorUi implements InspectorProvider {
     private static final double[] RATE_BEATS = {1, 0.5, 0.25};
     private static final String[] REGISTERS = {"Low", "Mid", "High"};
     private static final int[] CENTRES = {48, 60, 72};
-    private static final String[] EXISTING = {"Replace", "Keep"};
+    private static final String[] EXISTING = {"Replace mine", "Replace all", "Keep"};
+    private static final int REPLACE_MINE = 0;
+    private static final int REPLACE_ALL = 1;
+    private static final String[] RANGES = {"Clip", "Selection"};
     private static final String[] FORM_LABELS = new String[GenLogic.FORMS.length];
     private static final String[] SECTIONS = {"Auto", "1 bar", "2 bars", "4 bars"};
     private static final double[] SECTION_BEATS = {0, 4, 8, 16};
@@ -74,27 +77,60 @@ public final class NoteGeneratorUi implements InspectorProvider {
     private static int rate = 2;
     private static int density = 50;
     private static final int[] register = {1, 2}; // per mode: chords in the middle, a melody above them
-    private static final int[] existing = {0, 1}; // per mode: chords replace the notes there, a melody keeps them
+    private static int existing = REPLACE_MINE;
+    private static int range = 0;
+
+    /** The notes each mode last wrote (Bitwig's note objects), so "Replace mine" can take them out again. */
+    private static final List<List<WeakReference<Object>>> mine = List.of(new ArrayList<>(), new ArrayList<>());
+
+    /** A plan and the notes it adds. */
+    private record Planned(Edit edit, List<Note> added, int mode) {
+        void apply() {
+            edit.apply();
+            List<WeakReference<Object>> kept = mine.get(mode);
+            kept.clear();
+            for (Note note : added) {
+                if (note.bitwigNote() != null) {
+                    kept.add(new WeakReference<>(note.bitwigNote()));
+                }
+            }
+        }
+    }
+
+    private static boolean isMine(Note note, int mode) {
+        for (WeakReference<Object> kept : mine.get(mode)) {
+            if (kept.get() == note.bitwigNote()) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     private static final List<WeakReference<BlockContext>> built = new ArrayList<>();
 
     // While a preview shows: the notes it was drawn for, the plan, and what ends it.
     private static Set<Object> shownOn = Set.of();
     private static Preview preview;
-    private static Edit previewed;
+    private static Planned previewed;
     private static Listening selectionWatch;
     private static Listening changeWatch;
     private static boolean previewPosted;
     private static String said; // the refusal last told while values change: said once, not per update
 
-    /** The generated notes, as a plan: over the selected notes' range, or with none selected over the whole clip. */
-    private static Edit plan(BlockContext context) {
-        List<Note> marks = marks(context);
+    /**
+     * The generated notes, as a plan. marks: the selected notes, used when Range is Selection, or when the Detail
+     * Editor's clip can't be found.
+     */
+    private static Planned plan(List<Note> marks) {
+        DetailEditor.Open open = range == 0 || marks.isEmpty() ? DetailEditor.open() : null;
         Clip clip;
         double start;
         double end;
-        List<Note> there; // the notes Replace removes
-        if (!marks.isEmpty()) {
+        if (open != null) {
+            clip = open.clip();
+            start = open.start();
+            end = open.end();
+        } else if (!marks.isEmpty()) {
             clip = marks.get(0).clip();
             if (clip == null) {
                 throw new Refused("the notes' clip can't be read");
@@ -108,19 +144,18 @@ public final class NoteGeneratorUi implements InspectorProvider {
                 start = Math.min(start, mark.start());
                 end = Math.max(end, mark.end());
             }
-            there = marks;
         } else {
-            DetailEditor.Open open = DetailEditor.open();
-            if (open == null) {
-                throw new Refused("open a note clip in the Detail Editor, or select notes");
+            throw new Refused("open a note clip in the Detail Editor");
+        }
+        List<Note> there = clip.notesBetween(start, end);
+        List<Note> leaving = new ArrayList<>();
+        for (Note note : there) {
+            boolean marked = open == null && marks.contains(note);
+            if (existing == REPLACE_ALL ? open != null || marked : existing == REPLACE_MINE && isMine(note, mode)) {
+                leaving.add(note);
             }
-            clip = open.clip();
-            start = open.start();
-            end = open.end();
-            there = clip.notesBetween(start, end);
         }
         GenLogic.Scale scale = scaleAt(clip, start);
-        boolean replace = existing[mode] == 0;
         int centre = CENTRES[register[mode]];
         String letters = GenLogic.FORMS[form];
         double sectionBeats = SECTION_BEATS[section];
@@ -130,9 +165,8 @@ public final class NoteGeneratorUi implements InspectorProvider {
             notes = GenLogic.chords(scale, start, end, CHORD_BEATS[chordLength], chordType == 1, bass == 1, centre, rhythm,
                     letters, sectionBeats, seed);
         } else {
-            Set<Note> leaving = replace ? new HashSet<>(there) : Set.of();
             List<GenLogic.Sounding> harmony = new ArrayList<>();
-            for (Note other : clip.notesBetween(start, end)) {
+            for (Note other : there) {
                 if (!leaving.contains(other)) {
                     harmony.add(new GenLogic.Sounding(other.key(), other.start(), other.end()));
                 }
@@ -144,28 +178,42 @@ public final class NoteGeneratorUi implements InspectorProvider {
         }
 
         Edit edit = PianoRoll.edit(mode == CHORDS ? "Generate Chords" : "Generate Melody");
-        if (replace) {
-            for (Note note : there) {
-                edit.remove(note);
-            }
+        for (Note note : leaving) {
+            edit.remove(note);
         }
         int channel = there.isEmpty() ? 0 : there.get(0).channel();
+        List<Note> added = new ArrayList<>();
         for (GenLogic.Out out : notes) {
-            edit.add(clip, channel, out.key(), out.start(), out.duration(), out.velocity(), null);
+            added.add(edit.add(clip, channel, out.key(), out.start(), out.duration(), out.velocity(), null));
         }
-        return edit;
+        return new Planned(edit, added, mode);
     }
 
-    /** The selected notes, each once. None in a clip's Inspector, or when nothing is selected. */
+    /** The selected notes, each once. None outside the Note Inspector, or when nothing is selected. */
     private static List<Note> marks(BlockContext context) {
         if (context.context() != Context.NOTE) {
             return List.of();
         }
         try {
             return new ArrayList<>(new LinkedHashSet<>(PianoRoll.selection(context.panel()).notes()));
-        } catch (Refused e) {
+        } catch (RuntimeException e) {
             return List.of();
         }
+    }
+
+    /** The button beside the piano keys: other notes with the block's settings, written at once as one Undo step. */
+    static void generateNow() {
+        endAll();
+        seed = 1 + new Random().nextInt(999);
+        try {
+            plan(List.of()).apply();
+            Notifications.toast(LABEL + ": " + MODES[mode] + ", " + FORM_LABELS[form] + ", seed " + seed);
+        } catch (Refused e) {
+            Notifications.toast(LABEL + ": " + e.getMessage());
+        } catch (RuntimeException e) {
+            MOD.log(LABEL + " failed", e);
+        }
+        refreshBlocks();
     }
 
     /** Bitwig's key at this beat of the clip; C major when it can't be read. */
@@ -207,10 +255,10 @@ public final class NoteGeneratorUi implements InspectorProvider {
     private static void showPreview(BlockContext context) {
         endPreview();
         try {
-            Edit edit = plan(context);
-            Preview shown = edit.preview(true, true, true); // drawn as Apply would leave it, and heard when the clip plays
+            Planned planned = plan(marks(context));
+            Preview shown = planned.edit().preview(true, true, true); // drawn as Apply would leave it, and heard when the clip plays
             preview = shown;
-            previewed = edit;
+            previewed = planned;
             shown.onEnded(() -> endedElsewhere(shown));
             said = null;
         } catch (Refused e) {
@@ -232,10 +280,10 @@ public final class NoteGeneratorUi implements InspectorProvider {
 
     /** Apply: the plan on screen, unless a value changed and its preview hasn't been drawn yet. */
     private static void apply(BlockContext context) {
-        Edit shown = preview != null && preview.isShown() && !previewPosted ? previewed : null;
+        Planned shown = preview != null && preview.isShown() && !previewPosted ? previewed : null;
         endAll();
         try {
-            (shown != null ? shown : plan(context)).apply();
+            (shown != null ? shown : plan(marks(context))).apply();
         } catch (Refused e) {
             Notifications.toast(LABEL + ": " + e.getMessage());
         } catch (RuntimeException e) {
@@ -304,7 +352,7 @@ public final class NoteGeneratorUi implements InspectorProvider {
     @Override
     public void declare(Blocks blocks) {
         blocks.block("note_generator", LABEL)
-              .in(Context.NOTE, Context.ARRANGER_CLIP, Context.LAUNCHER_CLIP)
+              .in(Context.NOTE, Context.ARRANGER_CLIP, Context.LAUNCHER_CLIP, Context.TRACK)
               .content(context -> {
                   built.removeIf(block -> block.get() == null);
                   built.add(new WeakReference<>(context));
@@ -322,7 +370,8 @@ public final class NoteGeneratorUi implements InspectorProvider {
                                   Rows.number(context, "Density", 1, 100, 50, " %", false, () -> density,
                                           value -> density = (int) value)),
                           Rows.choice(context, "Register", REGISTERS, () -> register[mode], value -> register[mode] = value).row(),
-                          Rows.choice(context, "Existing", EXISTING, () -> existing[mode], value -> existing[mode] = value).row(),
+                          Rows.choice(context, "Existing", EXISTING, () -> existing, value -> existing = value).row(),
+                          Rows.choice(context, "Range", RANGES, () -> range, value -> range = value).row(),
                           Rows.number(context, "Seed", 1, 999, 1, "", false, () -> seed, value -> seed = (int) value),
                           Rows.button(context, "Dice", () -> dice(context)),
                           Rows.button(context, "Apply", () -> apply(context)));

@@ -4,15 +4,17 @@ Generates **chords** or a **melody** in the project's key, laid out in a form su
 
 - Mod ID: `note-generator`
 - Needs Framework: Piano Roll, Framework: Inspector and Framework: Notifications (all ship with Patchbay).
-- Built against Bitwig Studio 6.1.7 on macOS: the hook that finds the clip in the Detail Editor uses that build's names.
+- Built against Bitwig Studio 6.1.7 on macOS: the hooks that find the clip in the Detail Editor and add the button use that build's names.
 - Status: prototype.
 
 ## Use it
 
-1. Open a note clip in the Detail Editor (double-click it). The clip's Inspector shows the **Note Generator** block. It writes over the **whole clip**, so an empty clip is fine.
-2. Or select notes in the piano roll: the block in the Note Inspector then writes only from the first selected note's start to the last one's end.
-3. Pick a **Mode** and a **Form**, change any row or click **Dice**. The result appears as preview notes and plays in place of the clip's notes.
-4. Click **Dice** until you like it, then **Apply**. It is one Undo step.
+**One click:** open a note clip in the Detail Editor. In the strip beside the piano keys, below the editor mode buttons, click the note icon (**Generate Notes**). It fills the whole clip with the current settings and a new seed, as one Undo step. Click again for other notes: by default it replaces only what it wrote before.
+
+**With settings and preview:** the **Note Generator** block is in the Inspector of a selected note, clip or track.
+
+1. Pick a **Mode** and a **Form**, change any row or click **Dice**. The result appears as preview notes and plays in place of the clip's notes.
+2. Click **Dice** until you like it, then **Apply**. It is one Undo step.
 
 | Row | What it does |
 |---|---|
@@ -26,10 +28,13 @@ Generates **chords** or a **melody** in the project's key, laid out in a form su
 | Rate (Melody) | The grid the melody moves on: 1/4, 1/8 or 1/16 |
 | Density (Melody) | Few notes, some, or many |
 | Register | Low, Mid or High (around C2, C3, C4) |
-| Existing | **Replace** removes the notes there (the selected ones, or all of the clip's), **Keep** leaves them. Chords replace by default, a melody keeps |
+| Existing | **Replace mine**: takes out what this mode last generated and leaves everything else. **Replace all**: takes out every note in the range. **Keep**: adds to what is there |
+| Range | **Clip**: the whole clip open in the Detail Editor. **Selection**: from the first selected note's start to the last one's end |
 | Seed | The number behind the result: the same seed and settings give the same notes |
 | Dice | A new seed |
 | Apply | Writes the notes |
+
+A form needs room: with four sections of one bar each, a clip should be at least four bars long.
 
 ## What it generates
 
@@ -42,4 +47,4 @@ Bars are counted as 4 beats.
 
 ## Build
 
-`sh build.sh <unpacked Patchbay folder>` writes `out/note-generator/` and its ZIP with Patchbay's mod kit; it needs JDK 21 or newer, Python 3 and Bitwig Studio 6.1.7 in `/Applications`. `test/` holds an offline check of the generator (`GENLOGIC_OK`).
+`sh build.sh <unpacked Patchbay folder>` writes `out/note-generator/` and its ZIP with Patchbay's mod kit; it needs JDK 25 or newer, Python 3 and Bitwig Studio 6.1.7 in `/Applications`. `test/` holds an offline check of the generator (`GENLOGIC_OK`).
