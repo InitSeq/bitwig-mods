@@ -2,6 +2,10 @@
 
 A native Bitwig device (not a plug-in) by Coldforge: two reverb engines, **Space** and **Algorithm**, chained or in parallel, with a wet EQ and an animated furnace display. Loaded with [Patchbay](https://github.com/shaboogen-dev/Patchbay)'s **Framework: Nitro Devices**. Not affiliated with Bitwig GmbH.
 
+![Hybrid Reverb](../../previews/Hybrid%20Reverb.png)
+
+*(Preview rendered outside Bitwig: Bitwig draws the knobs, buttons and menus itself.)*
+
 Status: early. It loads in Bitwig Studio 6.1.7 (macOS); the Space engine, routing and EQ arrived in this version and are checked offline only so far.
 
 ## Controls
@@ -14,7 +18,7 @@ Status: early. It loads in Bitwig Studio 6.1.7 (macOS); the Space engine, routin
 | Tone | **EQ** on/off, **Low Cut**, **High Cut** (12 dB/oct), **Low Shelf** (200 Hz) and **High Shelf** (5 kHz) ±15 dB |
 | Output | **Predelay** up to 250 ms, **Width**, **Vintage** (Subtle to Extreme: rate, bit depth and bandwidth), **Dry/Wet**, **Send** (100 % wet, for a return track) |
 
-**The display** is a kiln: its arch widens with Size, a line of fire shows the algorithm's decay and a dashed amber line the space's, each as bright as its share of the blend. Embers rise with the level and sway with Mod, Damping turns the glow from white-hot to deep red, Freeze turns it ice blue, and the Shimmer character adds sparks.
+**The display** is a decay graph in a kiln mouth: time across, 60 dB up, with a grid every second and 12 dB. A filled line of fire shows the algorithm's decay and a cream line over an amber haze the space's, each as bright as its share of the blend; the arch widens with Size, and a bar at the right shows the wet level. Embers rise with the level and sway with Mod, Damping turns the glow from white-hot to deep red, Freeze turns it ice blue, and the Shimmer character adds sparks.
 
 ## How the engines work
 
@@ -35,7 +39,8 @@ Built for Bitwig Studio 6.1.7. The DSP is stored as Nitro source, which Bitwig c
 |---|---|
 | `hybrid_reverb.nitro` | The DSP, in Bitwig's Nitro language. Buffer sizes are `@…@` tokens that the build fills in |
 | `furnace.sksl` | The display (an SkSL shader), fed by three display outputs of the DSP |
-| `panel.svg` | The panel background |
+| `make_panel.py` | Draws the panel art (`panel_art.svg`: brushed steel, section plates, knob wells, logo), renders it with headless Chrome to `panel.png` and wraps it in `panel.svg`, which the device shows under its controls. Reads the layout from the build script |
+| `panel.svg`, `panel.png`, `panel_art.svg` | The panel, as built by `make_panel.py` |
 | `build_hybrid_reverb.py` | The device description: controls, layout and look. Writes `out/Hybrid Reverb.bwdevice` and a copy here |
 | `test/sim_hybrid_reverb.py` | Runs the Nitro text itself offline, sample by sample: decay times, predelay, Freeze, stability of every character and IR type, equal loudness of the IR types, IR Decay, routing and EQ (`SIM_OK`) |
 
