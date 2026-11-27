@@ -38,7 +38,8 @@ def nitro_text(sizes=FULL) -> str:
     return text
 
 
-def kiln(name="Kiln", uuid_key="coldforge/kiln", sizes=FULL, display=True) -> Device:
+def kiln(name="Kiln", uuid_key="coldforge/kiln", sizes=FULL, display=True, plain=False) -> Device:
+  """plain: only the simplest controls (popup choices, linear knobs, one knob size), for finding a load problem."""
   dev = Device(
     name=name,
     creator="Coldforge",
@@ -59,18 +60,18 @@ def kiln(name="Kiln", uuid_key="coldforge/kiln", sizes=FULL, display=True) -> De
 
   # right side: the character on top, two rows of knobs, then Freeze and Vintage
   dev.choice("algo", "Character", ["Ember", "Glass", "Halo", "Drift", "Shard"], default=0, rect=(80, 1, 68, 4),
-             buttons=True, tooltip="Ember: dark hall · Glass: bright, early reflections · Halo: octave shimmer · "
+             buttons=not plain, tooltip="Ember: dark hall · Glass: bright, early reflections · Halo: octave shimmer · "
                                    "Drift: slow waves · Shard: short and metallic")
-  dev.param("decay", "Decay", 0.1, 60, 2.5, unit_text="s", domain=Domain.LOG, knob=(80, 8), knob_size=3)
+  dev.param("decay", "Decay", 0.1, 60, 2.5, unit_text="s", domain=(Domain.LINEAR if plain else Domain.LOG), knob=(80, 8), knob_size=None if plain else 3)
   dev.param("size", "Size", 0, 200, 100, unit_text="%", knob=(94, 8))
   dev.param("damping", "Damping", 0, 100, 40, unit_text="%", knob=(108, 8))
   dev.param("mod", "Mod", 0, 100, 25, unit_text="%", knob=(122, 8))
   dev.param("shimmer", "Shimmer", 0, 100, 50, unit_text="%", knob=(136, 8))
-  dev.param("predelay", "Predelay", 0, 250, 0, unit_text="ms", domain=Domain.CUBE_ROOT, knob=(80, 25))
-  dev.param("lowcut", "Low Cut", 20, 1000, 60, unit_text="Hz", domain=Domain.LOG, knob=(94, 25))
-  dev.param("highcut", "High Cut", 1000, 20000, 12000, unit_text="Hz", domain=Domain.LOG, knob=(108, 25))
+  dev.param("predelay", "Predelay", 0, 250, 0, unit_text="ms", domain=(Domain.LINEAR if plain else Domain.CUBE_ROOT), knob=(80, 25))
+  dev.param("lowcut", "Low Cut", 20, 1000, 60, unit_text="Hz", domain=(Domain.LINEAR if plain else Domain.LOG), knob=(94, 25))
+  dev.param("highcut", "High Cut", 1000, 20000, 12000, unit_text="Hz", domain=(Domain.LINEAR if plain else Domain.LOG), knob=(108, 25))
   dev.param("width", "Width", 0, 200, 100, unit_text="%", knob=(122, 25))
-  dev.param("mix", "Mix", 0, 100, 35, unit_text="%", knob=(136, 25), knob_size=3)
+  dev.param("mix", "Mix", 0, 100, 35, unit_text="%", knob=(136, 25), knob_size=None if plain else 3)
   dev.toggle("freeze", "Freeze", default=False, button=(80, 43, 14, 5), style=ButtonStyle.BUTTON,
              tooltip="Holds the reverb tail and stops new input")
   dev.choice("vintage", "Vintage", ["Off", "Subtle", "Old", "Older", "Extreme"], default=0, rect=(97, 42, 22, 4),
@@ -95,3 +96,4 @@ if __name__ == "__main__":
     if "--probe" in sys.argv:
         write(kiln("Kiln Probe A", "coldforge/kiln-probe-a", SMALL, display=False))
         write(kiln("Kiln Probe B", "coldforge/kiln-probe-b", SMALL, display=True))
+        write(kiln("Kiln Probe C", "coldforge/kiln-probe-c", SMALL, display=False, plain=True))
