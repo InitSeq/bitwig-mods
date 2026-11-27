@@ -1,0 +1,704 @@
+// Kiln: algorithmic reverb (Coldforge). Port of the algorithm half of CF Hybrid Reverb.
+// in -> predelay -> early reflections -> input diffusers -> 8-line FDN (Householder, damping,
+//       30 Hz high-pass, decay gain, modulation, soft limit, octave shimmer) -> low/high cut
+//       -> width -> vintage -> equal-power dry/wet -> out
+// Parameters arrive in their own units: predelay ms, decay s, size/damping/mod/shimmer/width/mix %,
+// lowcut/highcut Hz. algo: 0 Ember, 1 Glass, 2 Halo, 3 Drift, 4 Shard. vintage: 0 off .. 4 extreme.
+struct kiln
+{
+    audio_inport<f32<2>> in;
+    audio_inport<f32> predelay;
+    audio_inport<f32> decay;
+    audio_inport<f32> size;
+    audio_inport<f32> damping;
+    audio_inport<f32> mod;
+    audio_inport<f32> shimmer;
+    audio_inport<f32> lowcut;
+    audio_inport<f32> highcut;
+    audio_inport<f32> width;
+    audio_inport<f32> mix;
+    value_inport<i32> algo;
+    value_inport<i32> vintage;
+    value_inport<bool> freeze;
+    audio_outport<f32<2>> out;
+    audio_outport<f32<4>> ui_a;   // input level, wet level, decay (s), size factor
+    audio_outport<f32<4>> ui_b;   // damping 0..1, freeze 0/1, algorithm, time (s)
+    audio_outport<f32<4>> ui_c;   // mod 0..1, shimmer 0..1, mix 0..1, width 0..2
+
+    // delay memory (sizes set by build_kiln.py): 8 lines, 8 diffuser stages, 2 ER, 2 predelay, the shifter
+    f32[@LN8@] lines;
+    f32[@DF8@] difb;
+    f32[@ER2@] erb;
+    f32[@ER2@] pdb;
+    f32[@SH@] shb;
+    i32 w_line = 0;
+    i32 w_dif = 0;
+    i32 w_er = 0;
+    i32 w_pd = 0;
+    i32 w_sh = 0;
+
+    f32[8] base_ms;
+    f32[8] out_sign;
+    f32[8] in_sign;
+    f32[8] shim_sign;
+    f32[8] mod_mul;
+    f32[8] mod_off;
+    f32[8] dif_l;
+    f32[8] dif_r;
+    f32[8] er_l;
+    f32[8] er_r;
+    f32[8] er_g;
+
+    f32[8] damp_z;
+    f32[8] hp_z;
+    f32[8] g_s;
+    f32[8] y;
+
+    f32 s_size = 1.0;
+    f32 s_k = 0.7;
+    f32 s_gate = 1.0;
+    f32 s_dc = 0.0;
+    f32 s_md = 0.0;
+    f32 s_er = 0.0;
+    f32 s_sh = 0.0;
+    f32 s_pd = 0.0;
+    f32 s_mix = 0.35;
+    f32 s_width = 1.0;
+    f32 s_lc = 60.0;
+    f32 s_hc = 12000.0;
+    f32 s_vamt = 0.0;
+    f32 s_vinc = 1.0;
+    f32 s_vq = 32768.0;
+    f32 s_vc = 0.0;
+    f32 mod_phase = 0.0;
+    f32 sh_phase = 0.0;
+    f32 clock = 0.0;
+    f32 lc1_l = 0.0;
+    f32 lc2_l = 0.0;
+    f32 lc1_r = 0.0;
+    f32 lc2_r = 0.0;
+    f32 hc1_l = 0.0;
+    f32 hc2_l = 0.0;
+    f32 hc1_r = 0.0;
+    f32 hc2_r = 0.0;
+    f32 v_phase = 0.0;
+    f32 v_hl = 0.0;
+    f32 v_hr = 0.0;
+    f32 v_l1 = 0.0;
+    f32 v_l2 = 0.0;
+    f32 v_r1 = 0.0;
+    f32 v_r2 = 0.0;
+    f32 lvl_in = 0.0;
+    f32 lvl_wet = 0.0;
+    i32 started = 0;   // 0 until the first sample: then the smoothed values start at their targets
+
+    f32 clampf(f32 x, f32 lo, f32 hi)
+    {
+        return fmax(lo, fmin(hi, x));
+    }
+
+    // the algorithms: line length, diffusion, damping cutoff, modulation depth (ms) and rate (Hz),
+    // early reflections, shimmer
+    f32 a_len(i32 a)
+    {
+        f32 v = 1.3;
+        if (a == 1)
+            v = 0.8;
+        if (a == 2)
+            v = 1.15;
+        if (a == 3)
+            v = 1.0;
+        if (a == 4)
+            v = 0.42;
+        return v;
+    }
+
+    f32 a_dif(i32 a)
+    {
+        f32 v = 0.72;
+        if (a == 1)
+            v = 0.55;
+        if (a == 2)
+            v = 0.7;
+        if (a == 3)
+            v = 0.65;
+        if (a == 4)
+            v = 0.12;
+        return v;
+    }
+
+    f32 a_damp(i32 a)
+    {
+        f32 v = 0.45;
+        if (a == 1)
+            v = 2.0;
+        if (a == 2)
+            v = 0.8;
+        if (a == 3)
+            v = 0.9;
+        if (a == 4)
+            v = 1.3;
+        return v;
+    }
+
+    f32 a_mdep(i32 a)
+    {
+        f32 v = 1.2;
+        if (a == 1)
+            v = 0.5;
+        if (a == 2)
+            v = 1.5;
+        if (a == 3)
+            v = 7.0;
+        if (a == 4)
+            v = 0.25;
+        return v;
+    }
+
+    f32 a_mrate(i32 a)
+    {
+        f32 v = 0.35;
+        if (a == 1)
+            v = 0.8;
+        if (a == 2)
+            v = 0.5;
+        if (a == 3)
+            v = 0.11;
+        if (a == 4)
+            v = 1.1;
+        return v;
+    }
+
+    f32 a_er(i32 a)
+    {
+        f32 v = 0.12;
+        if (a == 1)
+            v = 0.6;
+        if (a == 2)
+            v = 0.15;
+        if (a == 3)
+            v = 0.2;
+        if (a == 4)
+            v = 0.0;
+        return v;
+    }
+
+    // vintage modes: rate (Hz, 0 = none), bits, low-pass (Hz)
+    f32 v_rate(i32 m)
+    {
+        f32 v = 0.0;
+        if (m == 1)
+            v = 24000.0;
+        if (m == 2)
+            v = 16000.0;
+        if (m == 3)
+            v = 11025.0;
+        if (m == 4)
+            v = 6000.0;
+        return v;
+    }
+
+    f32 v_bits(i32 m)
+    {
+        f32 v = 24.0;
+        if (m == 1)
+            v = 16.0;
+        if (m == 2)
+            v = 12.0;
+        if (m == 3)
+            v = 10.0;
+        if (m == 4)
+            v = 8.0;
+        return v;
+    }
+
+    f32 v_lp(i32 m)
+    {
+        f32 v = 20000.0;
+        if (m == 1)
+            v = 12000.0;
+        if (m == 2)
+            v = 7500.0;
+        if (m == 3)
+            v = 5000.0;
+        if (m == 4)
+            v = 2800.0;
+        return v;
+    }
+
+    f32 soft_limit(f32 x)
+    {
+        f32 a = fabs(x);
+        f32 v = x;
+        if (a > 1.0)
+        {
+            f32 e = a - 1.0;
+            v = 1.0 + e / (1.0 + e);
+            if (x < 0.0)
+                v = -v;
+        }
+        return v;
+    }
+
+    // fractional reads (linear interpolation) d samples behind the write position
+    f32 rd_line(i32 n, f32 d)
+    {
+        f32 dd = clampf(d, 1.0, @LNM@);
+        i32 di = cast(floor(dd), i32);
+        f32 fr = dd - cast(di, f32);
+        i32 a = w_line - di;
+        if (a < 0)
+            a = a + @LN@;
+        i32 b = a - 1;
+        if (b < 0)
+            b = b + @LN@;
+        return lines[n * @LN@ + a] + fr * (lines[n * @LN@ + b] - lines[n * @LN@ + a]);
+    }
+
+    f32 rd_dif(i32 n, f32 d)
+    {
+        f32 dd = clampf(d, 1.0, @DFM@);
+        i32 di = cast(floor(dd), i32);
+        f32 fr = dd - cast(di, f32);
+        i32 a = w_dif - di;
+        if (a < 0)
+            a = a + @DF@;
+        i32 b = a - 1;
+        if (b < 0)
+            b = b + @DF@;
+        return difb[n * @DF@ + a] + fr * (difb[n * @DF@ + b] - difb[n * @DF@ + a]);
+    }
+
+    f32 rd_er(i32 n, f32 d)
+    {
+        f32 dd = clampf(d, 1.0, @ERM@);
+        i32 di = cast(floor(dd), i32);
+        f32 fr = dd - cast(di, f32);
+        i32 a = w_er - di;
+        if (a < 0)
+            a = a + @ER@;
+        i32 b = a - 1;
+        if (b < 0)
+            b = b + @ER@;
+        return erb[n * @ER@ + a] + fr * (erb[n * @ER@ + b] - erb[n * @ER@ + a]);
+    }
+
+    f32 rd_pd(i32 n, f32 d)
+    {
+        f32 dd = clampf(d, 0.0, @ERM@);
+        i32 di = cast(floor(dd), i32);
+        f32 fr = dd - cast(di, f32);
+        i32 a = w_pd - di;
+        if (a < 0)
+            a = a + @ER@;
+        i32 b = a - 1;
+        if (b < 0)
+            b = b + @ER@;
+        return pdb[n * @ER@ + a] + fr * (pdb[n * @ER@ + b] - pdb[n * @ER@ + a]);
+    }
+
+    f32 rd_sh(f32 d)
+    {
+        f32 dd = clampf(d, 1.0, @SHM@);
+        i32 di = cast(floor(dd), i32);
+        f32 fr = dd - cast(di, f32);
+        i32 a = w_sh - di;
+        if (a < 0)
+            a = a + @SH@;
+        i32 b = a - 1;
+        if (b < 0)
+            b = b + @SH@;
+        return shb[a] + fr * (shb[b] - shb[a]);
+    }
+
+    // one channel of the 4-stage Schroeder all-pass diffuser; stages ch*4 .. ch*4+3
+    f32 diffuse(i32 ch, f32 x, f32 k, f32 sf, f32 fs)
+    {
+        f32 v = x;
+        for (i32 s = 0; (s < 4); ++s)
+        {
+            f32 ms = dif_l[s];
+            if (ch == 1)
+                ms = dif_r[s];
+            f32 d = rd_dif(ch * 4 + s, ms * 0.001 * sf * fs);
+            f32 u = v - k * d;
+            difb[(ch * 4 + s) * @DF@ + w_dif] = u;
+            v = d + k * u;
+        }
+        return v;
+    }
+
+    reset
+    {
+        for (i32 i = 0; (i < @LN8@); ++i)
+            lines[i] = 0.0;
+        for (i32 i2 = 0; (i2 < @DF8@); ++i2)
+            difb[i2] = 0.0;
+        for (i32 i3 = 0; (i3 < @ER2@); ++i3)
+        {
+            erb[i3] = 0.0;
+            pdb[i3] = 0.0;
+        }
+        for (i32 i4 = 0; (i4 < @SH@); ++i4)
+            shb[i4] = 0.0;
+        base_ms[0] = 29.7;
+        base_ms[1] = 37.1;
+        base_ms[2] = 41.9;
+        base_ms[3] = 47.3;
+        base_ms[4] = 53.5;
+        base_ms[5] = 61.3;
+        base_ms[6] = 73.1;
+        base_ms[7] = 107.7;
+        out_sign[0] = 1.0;
+        out_sign[1] = 1.0;
+        out_sign[2] = -1.0;
+        out_sign[3] = 1.0;
+        out_sign[4] = 1.0;
+        out_sign[5] = -1.0;
+        out_sign[6] = -1.0;
+        out_sign[7] = 1.0;
+        in_sign[0] = 1.0;
+        in_sign[1] = 1.0;
+        in_sign[2] = 1.0;
+        in_sign[3] = -1.0;
+        in_sign[4] = -1.0;
+        in_sign[5] = 1.0;
+        in_sign[6] = 1.0;
+        in_sign[7] = -1.0;
+        shim_sign[0] = 1.0;
+        shim_sign[1] = -1.0;
+        shim_sign[2] = 1.0;
+        shim_sign[3] = 1.0;
+        shim_sign[4] = -1.0;
+        shim_sign[5] = 1.0;
+        shim_sign[6] = -1.0;
+        shim_sign[7] = -1.0;
+        mod_mul[0] = 1.0;
+        mod_mul[1] = 1.13;
+        mod_mul[2] = 0.91;
+        mod_mul[3] = 1.27;
+        mod_mul[4] = 1.0;
+        mod_mul[5] = 0.83;
+        mod_mul[6] = 1.19;
+        mod_mul[7] = 0.97;
+        mod_off[0] = 0.0;
+        mod_off[1] = 0.37;
+        mod_off[2] = 0.71;
+        mod_off[3] = 0.13;
+        mod_off[4] = 0.52;
+        mod_off[5] = 0.88;
+        mod_off[6] = 0.25;
+        mod_off[7] = 0.63;
+        dif_l[0] = 4.3;
+        dif_l[1] = 7.9;
+        dif_l[2] = 11.3;
+        dif_l[3] = 15.7;
+        dif_r[0] = 4.7;
+        dif_r[1] = 8.3;
+        dif_r[2] = 10.9;
+        dif_r[3] = 16.1;
+        er_l[0] = 7.1;
+        er_l[1] = 11.3;
+        er_l[2] = 17.9;
+        er_l[3] = 23.3;
+        er_l[4] = 29.7;
+        er_l[5] = 37.9;
+        er_l[6] = 43.1;
+        er_l[7] = 53.3;
+        er_r[0] = 6.7;
+        er_r[1] = 12.1;
+        er_r[2] = 16.9;
+        er_r[3] = 24.7;
+        er_r[4] = 28.3;
+        er_r[5] = 39.1;
+        er_r[6] = 44.3;
+        er_r[7] = 51.7;
+        er_g[0] = 0.8;
+        er_g[1] = -0.68;
+        er_g[2] = 0.58;
+        er_g[3] = -0.5;
+        er_g[4] = 0.42;
+        er_g[5] = -0.36;
+        er_g[6] = 0.3;
+        er_g[7] = -0.26;
+        for (i32 j = 0; (j < 8); ++j)
+        {
+            damp_z[j] = 0.0;
+            hp_z[j] = 0.0;
+            g_s[j] = 0.0;
+            y[j] = 0.0;
+        }
+        mod_phase = 0.0;
+        sh_phase = 0.0;
+        lc1_l = 0.0;
+        lc2_l = 0.0;
+        lc1_r = 0.0;
+        lc2_r = 0.0;
+        hc1_l = 0.0;
+        hc2_l = 0.0;
+        hc1_r = 0.0;
+        hc2_r = 0.0;
+        v_phase = 0.0;
+        v_l1 = 0.0;
+        v_l2 = 0.0;
+        v_r1 = 0.0;
+        v_r2 = 0.0;
+        started = 0;
+    }
+
+    process
+    {
+        f32 fs = cast(EC.samplerate, f32);
+        f32 kc = fmin(1.0, 1.0 / (0.03 * fs));       // 30 ms parameter smoothing
+        f32 ks = fmin(1.0, 1.0 / (0.15 * fs));       // 150 ms for size (pitch glide)
+        f32 kg = fmin(1.0, 1.0 / (0.05 * fs));       // 50 ms for the decay gains
+        if (started == 0)
+        {
+            kc = 1.0;
+            ks = 1.0;
+            kg = 1.0;
+            started = 1;
+        }
+        i32 al = algo;
+        if (al < 0)
+            al = 0;
+        if (al > 4)
+            al = 4;
+        i32 vm = vintage;
+        if (vm < 0)
+            vm = 0;
+        if (vm > 4)
+            vm = 4;
+
+        // targets
+        f32 t_size = clampf((0.25 + 0.0075 * clampf(size, 0.0, 200.0)) * a_len(al), 0.1, 2.5);
+        f32 t60 = clampf(decay, 0.1, 60.0);
+        f32 shim = 0.0;
+        if (al == 2)
+            shim = 0.01 * clampf(shimmer, 0.0, 100.0);
+        f32 d01 = 0.01 * clampf(damping, 0.0, 100.0);
+        f32 cutoff = clampf((400.0 + 17600.0 * (1.0 - d01) * (1.0 - d01)) * a_damp(al), 200.0, fs * 0.45);
+        f32 t_dc = exp(-6.283185307179586 * cutoff / fs);
+        f32 m01 = 0.01 * clampf(mod, 0.0, 100.0);
+        f32 t_md = m01 * a_mdep(al) * 0.001 * fs;
+        f32 t_gate = 1.0;
+        if (freeze)
+            t_gate = 0.0;
+
+        s_size = s_size + ks * (t_size - s_size);
+        s_k = s_k + kc * (a_dif(al) - s_k);
+        s_gate = s_gate + kc * (t_gate - s_gate);
+        s_dc = s_dc + kc * (t_dc - s_dc);
+        s_md = s_md + kc * (t_md - s_md);
+        s_er = s_er + kc * (a_er(al) - s_er);
+        s_sh = s_sh + kc * (0.35 * shim - s_sh);
+        s_pd = s_pd + kc * (clampf(predelay, 0.0, 250.0) * 0.001 * fs - s_pd);
+        s_mix = s_mix + kc * (0.01 * clampf(mix, 0.0, 100.0) - s_mix);
+        s_width = s_width + kc * (0.01 * clampf(width, 0.0, 200.0) - s_width);
+        s_lc = s_lc + kc * (clampf(lowcut, 20.0, 1000.0) - s_lc);
+        s_hc = s_hc + kc * (clampf(highcut, 1000.0, fmin(20000.0, fs * 0.45)) - s_hc);
+        f32 t_vamt = 0.0;
+        f32 t_vinc = 1.0;
+        if (vm > 0)
+        {
+            t_vamt = 1.0;
+            t_vinc = clampf(v_rate(vm) / fs, 0.01, 1.0);
+        }
+        s_vamt = s_vamt + kc * (t_vamt - s_vamt);
+        s_vinc = s_vinc + kc * (t_vinc - s_vinc);
+        s_vq = s_vq + kc * (exp((v_bits(vm) - 1.0) * 0.6931471805599453) - s_vq);
+        s_vc = s_vc + kc * (exp(-6.283185307179586 * clampf(v_lp(vm), 100.0, fs * 0.45) / fs) - s_vc);
+
+        f32 sf = s_size;
+        f32<2> x = in;
+        f32 dry_l = x[0];
+        f32 dry_r = x[1];
+
+        // predelay
+        pdb[w_pd] = dry_l;
+        pdb[@ER@ + w_pd] = dry_r;
+        f32 in_l = rd_pd(0, s_pd) * s_gate;
+        f32 in_r = rd_pd(1, s_pd) * s_gate;
+
+        // early reflections
+        erb[w_er] = in_l;
+        erb[@ER@ + w_er] = in_r;
+        f32 erl = 0.0;
+        f32 err = 0.0;
+        for (i32 e = 0; (e < 8); ++e)
+        {
+            erl = erl + er_g[e] * rd_er(0, er_l[e] * 0.001 * sf * fs);
+            err = err + er_g[e] * rd_er(1, er_r[e] * 0.001 * sf * fs);
+        }
+
+        f32 dl = diffuse(0, in_l + s_er * erl, s_k, sf, fs) * 0.5;
+        f32 dr = diffuse(1, in_r + s_er * err, s_k, sf, fs) * 0.5;
+
+        mod_phase = mod_phase + a_mrate(al) / fs;
+        if (mod_phase >= 1.0)
+            mod_phase = mod_phase - 1.0;
+
+        // the feedback delay network
+        f32 hpa = 1.0 - exp(-6.283185307179586 * 30.0 / fs);
+        f32 sum = 0.0;
+        f32 wl = 0.0;
+        f32 wr = 0.0;
+        for (i32 i = 0; (i < 8); ++i)
+        {
+            f32 len_s = base_ms[i] * 0.001 * sf;
+            f32 tg = exp(-6.907755278982137 * len_s / t60);
+            if (freeze)
+                tg = 1.0 - 0.3 * shim;
+            g_s[i] = g_s[i] + kg * (clampf(tg, 0.0, 1.0) - g_s[i]);
+            f32 dt = len_s * fs + s_md * sin(6.283185307179586 * (mod_phase * mod_mul[i] + mod_off[i]));
+            f32 v = rd_line(i, dt);
+            damp_z[i] = v + s_dc * (damp_z[i] - v);
+            v = damp_z[i];
+            hp_z[i] = hp_z[i] + hpa * (v - hp_z[i]);
+            v = (v - hp_z[i]) * g_s[i];
+            v = soft_limit(v);
+            y[i] = v;
+            sum = sum + v;
+            if (i == 1 || i == 3 || i == 5 || i == 7)
+                wr = wr + out_sign[i] * v;
+            else
+                wl = wl + out_sign[i] * v;
+        }
+
+        // octave-up shimmer in the feedback path
+        shb[w_sh] = sum * 0.35;
+        f32 win = fmin(0.05 * fs, @SHW@);
+        sh_phase = sh_phase + 1.0 / win;
+        if (sh_phase >= 1.0)
+            sh_phase = sh_phase - 1.0;
+        f32 ph2 = sh_phase + 0.5;
+        if (ph2 >= 1.0)
+            ph2 = ph2 - 1.0;
+        f32 ps = (sin(3.141592653589793 * sh_phase) * rd_sh(win * (1.0 - sh_phase) + 1.0)
+                + sin(3.141592653589793 * ph2) * rd_sh(win * (1.0 - ph2) + 1.0)) * s_sh;
+
+        f32 h = sum * 0.25;
+        for (i32 i5 = 0; (i5 < 8); ++i5)
+        {
+            f32 inj = dl;
+            if (i5 == 1 || i5 == 3 || i5 == 5 || i5 == 7)
+                inj = dr;
+            lines[i5 * @LN@ + w_line] = y[i5] - h + in_sign[i5] * inj + shim_sign[i5] * ps;
+        }
+
+        f32 wet_l = wl * 0.5 + s_er * erl;
+        f32 wet_r = wr * 0.5 + s_er * err;
+
+        // low cut and high cut: 12 dB/oct TPT state-variable filters
+        f32 kq = 1.4142135623730951;
+        f32 gl = sin(3.141592653589793 * s_lc / fs) / cos(3.141592653589793 * s_lc / fs);
+        f32 la1 = 1.0 / (1.0 + gl * (gl + kq));
+        f32 la2 = gl * la1;
+        f32 la3 = gl * la2;
+        f32 lv3 = wet_l - lc2_l;
+        f32 lv1 = la1 * lc1_l + la2 * lv3;
+        f32 lv2 = lc2_l + la2 * lc1_l + la3 * lv3;
+        lc1_l = 2.0 * lv1 - lc1_l;
+        lc2_l = 2.0 * lv2 - lc2_l;
+        wet_l = wet_l - kq * lv1 - lv2;
+        f32 rv3 = wet_r - lc2_r;
+        f32 rv1 = la1 * lc1_r + la2 * rv3;
+        f32 rv2 = lc2_r + la2 * lc1_r + la3 * rv3;
+        lc1_r = 2.0 * rv1 - lc1_r;
+        lc2_r = 2.0 * rv2 - lc2_r;
+        wet_r = wet_r - kq * rv1 - rv2;
+
+        f32 gh = sin(3.141592653589793 * s_hc / fs) / cos(3.141592653589793 * s_hc / fs);
+        f32 ha1 = 1.0 / (1.0 + gh * (gh + kq));
+        f32 ha2 = gh * ha1;
+        f32 ha3 = gh * ha2;
+        f32 hlv3 = wet_l - hc2_l;
+        f32 hlv1 = ha1 * hc1_l + ha2 * hlv3;
+        f32 hlv2 = hc2_l + ha2 * hc1_l + ha3 * hlv3;
+        hc1_l = 2.0 * hlv1 - hc1_l;
+        hc2_l = 2.0 * hlv2 - hc2_l;
+        wet_l = hlv2;
+        f32 hrv3 = wet_r - hc2_r;
+        f32 hrv1 = ha1 * hc1_r + ha2 * hrv3;
+        f32 hrv2 = hc2_r + ha2 * hc1_r + ha3 * hrv3;
+        hc1_r = 2.0 * hrv1 - hc1_r;
+        hc2_r = 2.0 * hrv2 - hc2_r;
+        wet_r = hrv2;
+
+        // width (mid/side)
+        f32 mid = 0.5 * (wet_l + wet_r);
+        f32 side = 0.5 * (wet_l - wet_r) * s_width;
+        wet_l = mid + side;
+        wet_r = mid - side;
+
+        // vintage: sample and hold, bit depth, 12 dB/oct low-pass, crossfaded in
+        v_phase = v_phase + s_vinc;
+        if (v_phase >= 1.0)
+        {
+            v_phase = v_phase - 1.0;
+            v_hl = floor(wet_l * s_vq + 0.5) / s_vq;
+            v_hr = floor(wet_r * s_vq + 0.5) / s_vq;
+        }
+        v_l1 = v_hl + s_vc * (v_l1 - v_hl);
+        v_l2 = v_l1 + s_vc * (v_l2 - v_l1);
+        v_r1 = v_hr + s_vc * (v_r1 - v_hr);
+        v_r2 = v_r1 + s_vc * (v_r2 - v_r1);
+        wet_l = wet_l + s_vamt * (v_l2 - wet_l);
+        wet_r = wet_r + s_vamt * (v_r2 - wet_r);
+
+        // equal-power dry/wet
+        f32 gd = cos(1.5707963267948966 * s_mix);
+        f32 gw = sin(1.5707963267948966 * s_mix);
+        out[0] = gd * dry_l + gw * wet_l;
+        out[1] = gd * dry_r + gw * wet_r;
+
+        // advance the write positions
+        w_line = w_line + 1;
+        if (w_line >= @LN@)
+            w_line = 0;
+        w_dif = w_dif + 1;
+        if (w_dif >= @DF@)
+            w_dif = 0;
+        w_er = w_er + 1;
+        if (w_er >= @ER@)
+            w_er = 0;
+        w_pd = w_pd + 1;
+        if (w_pd >= @ER@)
+            w_pd = 0;
+        w_sh = w_sh + 1;
+        if (w_sh >= @SH@)
+            w_sh = 0;
+
+        // display data
+        f32 att = 1.0 - exp(-1.0 / (0.01 * fs));
+        f32 rel = 1.0 - exp(-1.0 / (0.35 * fs));
+        f32 ai = fmax(fabs(dry_l), fabs(dry_r));
+        f32 aw = fmax(fabs(wet_l), fabs(wet_r));
+        f32 ri = rel;
+        if (ai > lvl_in)
+            ri = att;
+        lvl_in = lvl_in + ri * (ai - lvl_in);
+        f32 rw = rel;
+        if (aw > lvl_wet)
+            rw = att;
+        lvl_wet = lvl_wet + rw * (aw - lvl_wet);
+        clock = clock + 1.0 / fs;
+        if (clock >= 3600.0)
+            clock = clock - 3600.0;
+        f32 fz = 0.0;
+        if (freeze)
+            fz = 1.0;
+        ui_a[0] = lvl_in;
+        ui_a[1] = lvl_wet;
+        ui_a[2] = t60;
+        ui_a[3] = sf;
+        ui_b[0] = d01;
+        ui_b[1] = fz;
+        ui_b[2] = cast(al, f32);
+        ui_b[3] = clock;
+        ui_c[0] = m01;
+        ui_c[1] = shim;
+        ui_c[2] = s_mix;
+        ui_c[3] = s_width;
+    }
+}

@@ -1,0 +1,97 @@
+// Kiln: the furnace display.
+// audioLow:    input level, wet level, decay (s), size factor (0.1 .. 2.5)
+// audioMedium: damping 0..1, freeze 0/1, algorithm 0..4, time (s)
+// audioHigh:   mod 0..1, shimmer 0..1, mix 0..1, width 0..2
+uniform float4 audioLow;
+uniform float4 audioMedium;
+uniform float4 audioHigh;
+
+float kilnHash(float n) {
+    return fract(sin(n * 12.9898) * 43758.5453);
+}
+
+// colour of heat: t 0 = dark red, 1 = white-hot; ice 1 = frozen blue
+float3 kilnHeat(float t, float ice) {
+    float3 dark = float3(.35, .04, .01);
+    float3 ember = float3(1., .38, .06);
+    float3 hot = float3(1., .86, .55);
+    float3 c = t < .5 ? mix(dark, ember, t * 2.) : mix(ember, hot, t * 2. - 1.);
+    float3 cold = mix(float3(.10, .25, .45), float3(.75, .92, 1.), t);
+    return mix(c, cold, ice);
+}
+
+float kilnLine(float d, float w) {
+    return clamp(1. - abs(d) / w, 0., 1.);
+}
+
+half4 main(float2 fragCoord) {
+    float2 res = iResolution.xy;
+    float2 uv = float2(fragCoord.x / res.x, 1. - fragCoord.y / res.y);
+    float lvIn = clamp(audioLow.x * 1.5, 0., 1.);
+    float lvWet = clamp(audioLow.y * 2., 0., 1.);
+    float decay = audioLow.z;
+    float size = audioLow.w;
+    float damp = audioMedium.x;
+    float ice = audioMedium.y;
+    float algo = audioMedium.z;
+    float time = audioMedium.w;
+    float modA = audioHigh.x;
+    float shim = audioHigh.y;
+    float width = audioHigh.w;
+    float temp = 1. - .75 * damp;
+
+    // the chamber: dark brick, an arch whose span follows Size
+    float3 col = float3(.045, .035, .03);
+    float span = .22 + .2 * clamp(size / 2.5, 0., 1.);
+    float ax = (uv.x - .5) / span;
+    float archY = .42 + .38 * sqrt(max(0., 1. - ax * ax));
+    float inside = (abs(ax) < 1. && uv.y < archY) ? 1. : 0.;
+    float brick = step(.92, fract(uv.y * 14.)) + step(.95, fract(uv.x * 9. + step(.5, fract(uv.y * 7.)) * .5));
+    col = col + float3(.025, .015, .01) * clamp(brick, 0., 1.) * (1. - inside);
+    col = mix(col, float3(.02, .012, .01), inside);
+    float rim = kilnLine(uv.y - archY, .012) * step(abs(ax), 1.) + kilnLine(abs(ax) - 1., .012) * step(uv.y, archY);
+    col = col + kilnHeat(.55 * temp, ice) * rim * (.25 + .5 * lvWet);
+
+    // the fire bed: glows with the wet signal
+    float bed = exp(-uv.y * 9.) * (.15 + .85 * lvWet) * inside;
+    col = col + kilnHeat(temp, ice) * bed * 1.4;
+
+    // the decay tail: time across the chamber, 60 dB down at the right edge for decay = view
+    float view = max(1., decay * 1.25);
+    float t = (uv.x - (.5 - span)) / (2. * span) * view;
+    float env = exp(-6.9 * t / max(decay, .1));
+    float curveY = .1 + .55 * env * (.35 + .65 * max(lvWet, .25));
+    float onTail = (t > 0. && inside > 0.) ? 1. : 0.;
+    col = col + kilnHeat(temp * env, ice) * kilnLine(uv.y - curveY, .012) * onTail * 1.2;
+    col = col + kilnHeat(temp * env * .8, ice) * step(uv.y, curveY) * onTail * .18 * env;
+
+    // embers rising from the bed; many when loud, slow and wavy with Mod, frozen in place with Freeze
+    float speed = (.05 + .12 * temp) * (1. - ice);
+    for (int i = 0; i < 48; i++) {
+        float fi = float(i);
+        float seed = kilnHash(fi + 1.);
+        float alive = step(fi / 48., .15 + .85 * max(lvIn, lvWet * .8));
+        float px = .5 + (kilnHash(fi * 3.1) - .5) * 2. * span * clamp(width, .2, 2.) * .5;
+        float py = fract(seed + time * speed * (.6 + seed));
+        px = px + modA * .03 * sin(time * (1. + seed * 2.) + fi);
+        float2 d = float2((uv.x - px) * res.x / res.y, uv.y - (.05 + py * .8));
+        float r = .006 + .006 * seed;
+        float glow = exp(-dot(d, d) / (r * r)) * (1. - py) * alive;
+        col = col + kilnHeat(temp * (1. - py * .6), ice) * glow * 1.6;
+    }
+
+    // shimmer: sparks high in the arch (Halo algorithm)
+    float halo = (algo > 1.5 && algo < 2.5) ? shim : 0.;
+    for (int j = 0; j < 16; j++) {
+        float fj = float(j);
+        float2 p = float2(.5 + (kilnHash(fj * 7.7) - .5) * 1.6 * span, .55 + .3 * kilnHash(fj * 1.3));
+        float tw = .5 + .5 * sin(time * (3. + 5. * kilnHash(fj)) + fj);
+        float2 d = float2((uv.x - p.x) * res.x / res.y, uv.y - p.y);
+        col = col + float3(1., .95, .8) * exp(-dot(d, d) / .00002) * tw * halo * (.3 + .7 * lvWet) * inside;
+    }
+
+    // vignette
+    float2 c = float2(uv.x - .5, uv.y - .5);
+    col = col * (1. - .55 * dot(c, c));
+    return half4(half3(col), 1.);
+}

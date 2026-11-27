@@ -9,3 +9,9 @@ Mods for Bitwig Studio, loaded with [Patchbay](https://github.com/shaboogen-dev/
 Get the ZIPs from [Releases](../../releases) and add them in Patchbay with **Mods → Add Mod…**, or add this repository as a mod source in Patchbay Launcher.
 
 - [Piano Roll: Note Generator](note-generator/README.md): generates chords or a melody in the project's key, laid out in a form such as A A A B, over a time selection or the whole clip, with the options in a dialog. Prototype, for Bitwig Studio 6.1.7 on macOS.
+
+## Devices
+
+Native Bitwig devices, loaded with Patchbay's Framework: Nitro Devices.
+
+- [Kiln](devices/kiln/README.md): algorithmic reverb with an animated furnace display. **Work in progress: does not load in Bitwig yet.**
