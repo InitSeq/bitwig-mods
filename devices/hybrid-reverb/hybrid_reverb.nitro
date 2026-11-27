@@ -1,4 +1,4 @@
-// Hybrid Reverb (Coldforge): a "space" engine and an algorithmic engine, chained or in parallel.
+// Hybrid Reverb: a "space" engine and an algorithmic engine, chained or in parallel.
 // Space: the impulse-response types of CF Hybrid Reverb (Hall, Room, Chamber, Plate, Spring, Cathedral,
 //   Ambience), rebuilt as a real-time structure instead of a convolution: an early-reflection tap cluster
 //   and a diffuse tail from an 8-line network whose low, mid and high bands decay with the IR's own times,

@@ -1,7 +1,8 @@
-// Hybrid Reverb: the furnace display. A decay graph in a kiln mouth: time across, level up (60 dB).
-// The algorithm's tail is a filled line of fire, the space's a cream line over an amber haze, each as
-// bright as its share of the blend. Embers rise with the level and sway with Mod; Damping cools the
-// colour from white-hot to deep red; Freeze turns everything to ice; the Shimmer character adds sparks.
+// Hybrid Reverb: the ripple display. Sound spreads from the centre as rings in a room whose walls are
+// set by Size: cyan rings for the algorithm, magenta for the space, each fading over its own decay and
+// as bright as its share of the blend. Walls light up where the rings reach them. Dust drifts with Mod;
+// Freeze stops the rings and turns them to ice; the Shimmer character adds stars. A thin decay graph
+// runs along the bottom.
 // audioLow:    input level, wet level, decay (s), size factor (0.1 .. 2.5)
 // audioMedium: damping 0..1, freeze 0/1, algorithm 0..4, time (s)
 // audioHigh:   mod 0..1, shimmer 0..1, space decay (s), algorithm share 0..1
@@ -9,37 +10,39 @@ uniform float4 audioLow;
 uniform float4 audioMedium;
 uniform float4 audioHigh;
 
-float hrHash(float n) {
+float nbHash(float n) {
     return fract(sin(n * 12.9898) * 43758.5453);
 }
 
-// colour of heat: t 0 = deep red, 1 = white-hot; ice 1 = frozen blue
-float3 hrHeat(float t, float ice) {
-    float3 dark = float3(.45, .06, .02);
-    float3 ember = float3(1., .42, .08);
-    float3 hot = float3(1., .9, .62);
-    float3 c = t < .5 ? mix(dark, ember, t * 2.) : mix(ember, hot, t * 2. - 1.);
-    float3 cold = mix(float3(.12, .3, .55), float3(.8, .95, 1.), t);
-    return mix(c, cold, ice);
-}
-
 // 0..1 from a level (linear), over 60 dB
-float hrDb(float a) {
+float nbDb(float a) {
     return clamp(1. + log(max(a, .000001)) * .1448, 0., 1.);
 }
 
-float hrBand(float d, float w) {
+float nbLine(float d, float w) {
     return clamp(1. - abs(d) / w, 0., 1.);
+}
+
+// rings of one engine: n rings spaced in time, each fading with the decay; returns brightness
+float nbRings(float r, float maxR, float t, float decay, float rate, float width) {
+    float sum = 0.;
+    for (int k = 0; k < 7; k++) {
+        float age = fract(t * rate + float(k) / 7.);
+        float radius = age * maxR;
+        float seconds = age / rate;
+        float fade = exp(-6.9 * seconds / max(decay, .05)) * (1. - age);
+        sum = sum + (nbLine(r - radius, width) + .35 * exp(-abs(r - radius) / (width * 4.))) * fade;
+    }
+    return sum;
 }
 
 half4 main(float2 fragCoord) {
     float2 res = iResolution.xy;
-    float2 uv = float2(fragCoord.x / res.x, 1. - fragCoord.y / res.y);
-    float aspect = res.x / res.y;
-    float lvIn = hrDb(audioLow.x);
-    float lvWet = hrDb(audioLow.y);
+    float2 p = float2(fragCoord.x - res.x * .5, res.y * .46 - fragCoord.y) / res.y;
+    float lvIn = nbDb(audioLow.x);
+    float lvWet = nbDb(audioLow.y);
     float decay = max(audioLow.z, .1);
-    float size = audioLow.w;
+    float size = clamp(audioLow.w / 2.5, 0., 1.);
     float damp = audioMedium.x;
     float ice = audioMedium.y;
     float algo = audioMedium.z;
@@ -48,88 +51,77 @@ half4 main(float2 fragCoord) {
     float shim = audioHigh.y;
     float spaceDecay = max(audioHigh.z, .05);
     float share = audioHigh.w;
-    float temp = 1. - .7 * damp;
 
-    // the kiln mouth: an arch, wider with Size; dark brick outside, glowing chamber inside
-    float span = .36 + .12 * clamp(size / 2.5, 0., 1.);
-    float ax = (uv.x - .5) / span;
-    float archY = .55 + .4 * sqrt(max(0., 1. - ax * ax));
-    float inArch = (abs(ax) < 1. && uv.y < archY) ? 1. : 0.;
-    float edge = min(clamp((archY - uv.y) * 18., 0., 1.), clamp((1. - abs(ax)) * span * 30., 0., 1.));
-    float row = floor(uv.y * 9.);
-    float brickX = fract(uv.x * 7. + .5 * fract(row * .5));
-    float mortar = max(step(.9, fract(uv.y * 9.)), step(.94, brickX));
-    float3 col = mix(float3(.075, .05, .04), float3(.03, .02, .018), mortar);
-    col = col * (1. - .5 * inArch);
-    float3 glowBed = hrHeat(temp * (.4 + .6 * lvWet), ice);
-    col = col + glowBed * exp(-uv.y * 4.5) * (.25 + .9 * lvWet) * edge;
-    col = col + hrHeat(.7 * temp, ice) * (1. - edge) * inArch * .0;
-    col = col + hrHeat(.55 * temp, ice) * hrBand((archY - uv.y) * res.y, 2.5) * step(abs(ax), 1.) * (.4 + .5 * lvWet);
+    float3 cyan = mix(float3(.25, .9, 1.), float3(.9, .97, 1.), ice);
+    float3 magenta = mix(float3(1., .3, .72), float3(.82, .9, 1.), ice);
+    float3 violet = float3(.55, .42, 1.);
 
-    // the decay graph inside the arch: time from the left of the arch to its right
-    float x0 = .5 - span;
-    float view = max(1., max(decay, spaceDecay) * 1.15);
-    float t = (uv.x - x0) / (2. * span) * view;
-    float onGraph = (t > 0. && uv.x < .5 + span) ? 1. : 0.;
-    float top = .1 + .62 * (.45 + .55 * lvWet);
-    float floorY = .1;
-    float aShare = .2 + .8 * share;
-    float sShare = .2 + .8 * (1. - share);
+    // background: deep blue-violet with a soft light in the middle
+    float r = length(p);
+    float3 col = float3(.012, .016, .04) + violet * .10 * exp(-r * r * 6.) + cyan * .04 * exp(-r * r * 2.);
 
-    // grid: a line every second, one every 12 dB
-    float gx = hrBand(fract(t) * res.x / view * (2. * span), 1.) * onGraph;
-    float gy = hrBand(fract((uv.y - floorY) / (top - floorY) * 5.) * res.y * (top - floorY) / 5., 1.) * step(floorY, uv.y) * step(uv.y, top);
-    col = col + float3(.35, .16, .07) * max(gx, gy) * .22 * edge;
+    // the room: a rounded rectangle whose size follows Size; its walls glow with the wet level
+    float2 room = float2(.55 + .55 * size, .26 + .14 * size);
+    float2 q = abs(p) - room + float2(.06, .06);
+    float wall = length(max(q, float2(0., 0.))) + min(max(q.x, q.y), 0.) - .06;
+    float wallGlow = nbLine(wall, .006) * (.25 + .9 * lvWet) + exp(-abs(wall) * 60.) * .25 * lvWet;
+    col = col + mix(violet, cyan, .5 + .5 * sin(atan(p.y, p.x) * 2. + time * .3)) * wallGlow;
+    float inside = wall < 0. ? 1. : 0.;
 
-    // space: an amber haze under a cream line
-    float envS = exp(-6.9 * t / spaceDecay);
-    float yS = floorY + (top - floorY) * envS;
-    col = col + float3(1., .6, .2) * step(uv.y, yS) * step(floorY, uv.y) * onGraph * .16 * envS * sShare * edge;
-    col = col + mix(float3(1., .86, .62), float3(.75, .9, 1.), ice) * hrBand((uv.y - yS) * res.y, 1.6) * onGraph * sShare * .9 * edge;
+    // grid on the floor of the room
+    float grid = max(nbLine(fract(p.x * 10.) - .5, .02), nbLine(fract(p.y * 10.) - .5, .02));
+    col = col + violet * grid * .035 * inside;
 
-    // algorithm: a filled line of fire
-    float envA = exp(-6.9 * t / decay);
-    float yA = floorY + (top - floorY) * envA;
-    float under = step(uv.y, yA) * step(floorY, uv.y) * onGraph;
-    float depth = clamp((yA - uv.y) / max(yA - floorY, .001), 0., 1.);
-    col = col + hrHeat(temp * envA * (1. - .6 * depth), ice) * under * (.55 - .35 * depth) * aShare * edge;
-    col = col + hrHeat(temp * (.6 + .4 * envA), ice) * hrBand((uv.y - yA) * res.y, 2.2) * onGraph * 1.3 * aShare * edge;
-    col = col + hrHeat(temp * envA, ice) * exp(-abs(uv.y - yA) * res.y * .08) * onGraph * .35 * aShare * edge;
+    // the rings: frozen in place with Freeze, a little blurred by Damping
+    float t = time * (1. - ice) + ice * 7.3;
+    float maxR = length(room) * 1.05;
+    float wid = .008 + .01 * damp;
+    float amp = .35 + .9 * max(lvWet, lvIn * .6);
+    float ringA = nbRings(r, maxR, t, decay, .55, wid) * (.15 + .85 * share);
+    float ringS = nbRings(r, maxR, t + .37, spaceDecay, .8, wid * 1.6) * (.15 + .85 * (1. - share));
+    col = col + cyan * ringA * amp * 2. * inside;
+    col = col + magenta * ringS * amp * 1.5 * inside;
 
-    // embers rising out of the bed: as many as the level, swaying with Mod; still in Freeze
-    float speed = (.06 + .12 * temp) * (1. - ice);
-    for (int i = 0; i < 70; i++) {
+    // the source in the middle, pulsing with the input
+    col = col + mix(cyan, float3(1., 1., 1.), .5) * exp(-r * r * (900. - 600. * lvIn)) * (.4 + 1.2 * lvIn);
+
+    // dust drifting with Mod
+    for (int i = 0; i < 40; i++) {
         float fi = float(i);
-        float seed = hrHash(fi + 1.);
-        float alive = step(fi / 70., .12 + .88 * max(lvIn, lvWet));
-        float py = fract(seed + time * speed * (.5 + seed));
-        float px = .5 + (hrHash(fi * 3.1) - .5) * 2. * span * .92;
-        px = px + (.01 + modA * .04) * sin(time * (1. + seed * 2.) + fi * 1.7) * py;
-        float2 d = float2((uv.x - px) * aspect, uv.y - (.08 + py * .85));
-        float r = .004 + .007 * seed;
-        float glow = exp(-dot(d, d) / (r * r)) * (1. - py) * alive;
-        col = col + hrHeat(temp * (1. - py * .5), ice) * glow * 1.8 * edge;
+        float2 d0 = float2(nbHash(fi) - .5, nbHash(fi + 9.1) - .5) * room * 2.;
+        float ang = time * (.05 + .25 * modA) * (nbHash(fi + 3.) - .5) * 4. * (1. - ice);
+        float2 dp = float2(d0.x * cos(ang) - d0.y * sin(ang), d0.x * sin(ang) + d0.y * cos(ang));
+        float2 d = p - dp;
+        float tw = .5 + .5 * sin(time * (1. + 3. * nbHash(fi + 5.)) + fi);
+        col = col + mix(cyan, magenta, nbHash(fi + 2.)) * exp(-dot(d, d) * 40000.) * tw * (.25 + .75 * lvWet) * inside;
     }
 
-    // sparks of the Shimmer character, high in the arch
-    float sparks = (algo > 1.5 && algo < 2.5) ? shim : 0.;
-    for (int j = 0; j < 22; j++) {
+    // stars of the Shimmer character
+    float stars = (algo > 1.5 && algo < 2.5) ? shim : 0.;
+    for (int j = 0; j < 18; j++) {
         float fj = float(j);
-        float2 p = float2(.5 + (hrHash(fj * 7.7) - .5) * 1.7 * span, .55 + .38 * hrHash(fj * 1.3));
-        float tw = .5 + .5 * sin(time * (3. + 5. * hrHash(fj)) + fj);
-        float2 d = float2((uv.x - p.x) * aspect, uv.y - p.y);
-        col = col + float3(1., .95, .82) * exp(-dot(d, d) / .00003) * tw * sparks * (.3 + .7 * lvWet) * edge;
+        float2 sp = float2(nbHash(fj * 7.7) - .5, nbHash(fj * 1.3) - .5) * room * 1.8;
+        float tw = pow(.5 + .5 * sin(time * (2. + 4. * nbHash(fj)) + fj * 2.), 4.);
+        float2 d = p - sp;
+        float crs = exp(-abs(d.x) * 400.) * exp(-abs(d.y) * 60.) + exp(-abs(d.y) * 400.) * exp(-abs(d.x) * 60.);
+        col = col + float3(1., .95, 1.) * (crs * .6 + exp(-dot(d, d) * 20000.)) * tw * stars * (.3 + .7 * lvWet);
     }
 
-    // frost round the edges in Freeze
-    float2 c = float2(uv.x - .5, uv.y - .5);
-    float frost = ice * clamp(dot(c, c) * 3.2 - .25, 0., 1.) * (.6 + .4 * hrHash(floor(uv.x * 160.) + floor(uv.y * 90.) * 161.));
-    col = mix(col, float3(.78, .9, 1.), frost * .55);
+    // the decay graph along the bottom: both engines, 0..60 dB over the longer decay
+    float2 uv = float2(fragCoord.x / res.x, 1. - fragCoord.y / res.y);
+    float view = max(1., max(decay, spaceDecay) * 1.1);
+    float gt = (uv.x - .06) / .88 * view;
+    float gh = .085;
+    float onG = (gt > 0. && uv.x < .94) ? 1. : 0.;
+    float ya = .035 + gh * exp(-6.9 * gt / decay);
+    float ys = .035 + gh * exp(-6.9 * gt / spaceDecay);
+    col = col + cyan * nbLine((uv.y - ya) * res.y, 1.2) * onG * (.3 + .7 * share);
+    col = col + magenta * nbLine((uv.y - ys) * res.y, 1.2) * onG * (.3 + .7 * (1. - share));
+    col = col + float3(1., 1., 1.) * nbLine((uv.y - .035) * res.y, .6) * onG * .12;
 
-    // wet level: a thin bar at the right
-    float bar = step(.975, uv.x) * step(uv.x, .99) * step(uv.y, .06 + .88 * lvWet) * step(.06, uv.y);
-    col = col + hrHeat(temp, ice) * bar * .9;
+    // frost in Freeze
+    float frost = ice * clamp(r * r * 1.6 - .1, 0., 1.) * (.5 + .5 * nbHash(floor(fragCoord.x * .5) * 7. + floor(fragCoord.y * .5) * 131.));
+    col = mix(col, float3(.85, .93, 1.), frost * .35);
 
-    col = col * (1. - .35 * dot(c, c));
     return half4(half3(col), 1.);
 }

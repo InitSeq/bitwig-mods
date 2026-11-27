@@ -1,6 +1,6 @@
 # Hybrid Reverb
 
-A native Bitwig device (not a plug-in) by Coldforge: two reverb engines, **Space** and **Algorithm**, chained or in parallel, with a wet EQ and an animated furnace display. Loaded with [Patchbay](https://github.com/shaboogen-dev/Patchbay)'s **Framework: Nitro Devices**. Not affiliated with Bitwig GmbH.
+A native Bitwig device (not a plug-in): two reverb engines, **Space** and **Algorithm**, chained or in parallel, with a wet EQ and an animated furnace display. Loaded with [Patchbay](https://github.com/shaboogen-dev/Patchbay)'s **Framework: Nitro Devices**. Not affiliated with Bitwig GmbH.
 
 ![Hybrid Reverb](../../previews/Hybrid%20Reverb.png)
 
@@ -23,7 +23,7 @@ Status: early. It loads in Bitwig Studio 6.1.7 (macOS); the Space engine, routin
 ## How the engines work
 
 - **Algorithm:** an 8-line feedback delay network with Householder mixing, input diffusers, early reflections, damping, a 30 Hz high-pass and a soft limiter in the loop, modulation, and an octave shifter in the feedback path (Shimmer).
-- **Space:** the seven impulse-response types of Coldforge's CF Hybrid Reverb plug-in, rebuilt as a real-time structure instead of a convolution: each type's early-reflection cluster as taps, and its diffuse tail from a second 8-line network in which the low, mid and high bands decay with the type's own times, then tilted and band-limited like the IR. Spring adds a 2 kHz resonance and a dispersive echo every 56 ms; Cathedral its slap echoes. There is no IR loading.
+- **Space:** the seven impulse-response types of the CF Hybrid Reverb plug-in, rebuilt as a real-time structure instead of a convolution: each type's early-reflection cluster as taps, and its diffuse tail from a second 8-line network in which the low, mid and high bands decay with the type's own times, then tilted and band-limited like the IR. Spring adds a 2 kHz resonance and a dispersive echo every 56 ms; Cathedral its slap echoes. There is no IR loading.
 
 ## Install
 

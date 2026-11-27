@@ -1,4 +1,4 @@
-"""Build "Hybrid Reverb.bwdevice" (Coldforge) with bo3K's device generator.
+"""Build "Hybrid Reverb.bwdevice" with bo3K's device generator.
 python3 build_hybrid_reverb.py          -> out/Hybrid Reverb.bwdevice (and a copy next to this script)
 python3 build_hybrid_reverb.py --probe  -> also two diagnostic variants (smaller buffers, with and without display)
 
@@ -18,7 +18,7 @@ sys.path.insert(0, str(VENDOR / "bo-bitwig" / "tools" / "device-gen"))
 
 from bwgen import Device, Domain, Origin, ButtonStyle  # noqa: E402
 
-VERSION = 5  # metadata revision_no: raise it with each released change
+VERSION = 6  # metadata revision_no: raise it with each released change
 
 # delay buffer sizes in samples: lines, diffuser stages, early reflections and predelay, shifter
 FULL = dict(LN=32768, DF=8192, ER=16384, SH=4096, TP=32768)
@@ -46,19 +46,19 @@ SECTIONS = {"algorithm": (80, 41), "space": (122, 41), "output": (164, 41), "ton
 
 
 def hybrid_reverb(name="Hybrid Reverb", uuid_key="coldforge/kiln", sizes=FULL, display=True) -> Device:
-    # uuid_key stays "coldforge/kiln": projects made with Kiln keep finding the device
+    # uuid_key stays "coldforge/kiln" (only the ID is made from it): projects made with Kiln keep finding the device
     dev = Device(
         name=name,
-        creator="Coldforge",
+        creator="InitSeq",
         uuid_key=uuid_key,
         revision=VERSION,
         nitro=nitro_text(sizes),
         description="Space engine (Hall, Room, Chamber, Plate, Spring, Cathedral, Ambience) and algorithmic reverb, "
                     "chained or in parallel, with wet EQ, width, Vintage and Freeze",
-        tags="reverb hybrid hall room plate spring cathedral shimmer freeze ambient coldforge",
+        tags="reverb hybrid hall room plate spring cathedral shimmer freeze ambient",
         panel_size=PANEL,
         prevent_sleep=True,
-        knob_pie_color=1,                 # orange arcs
+        knob_pie_color=6,                 # white arcs
     )
 
     # look: the panel art (rendered from panel_art.svg to panel.png, embedded in panel.svg) under everything,
