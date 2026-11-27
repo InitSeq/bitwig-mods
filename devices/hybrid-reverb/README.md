@@ -18,7 +18,7 @@ Status: early. It loads in Bitwig Studio 6.1.7 (macOS); the Space engine, routin
 | Tone | **EQ** on/off, **Low Cut**, **High Cut** (12 dB/oct), **Low Shelf** (200 Hz) and **High Shelf** (5 kHz) ±15 dB |
 | Output | **Predelay** up to 250 ms, **Width**, **Vintage** (Subtle to Extreme: rate, bit depth and bandwidth), **Dry/Wet**, **Send** (100 % wet, for a return track) |
 
-**The display** is a decay graph in a kiln mouth: time across, 60 dB up, with a grid every second and 12 dB. A filled line of fire shows the algorithm's decay and a cream line over an amber haze the space's, each as bright as its share of the blend; the arch widens with Size, and a bar at the right shows the wet level. Embers rise with the level and sway with Mod, Damping turns the glow from white-hot to deep red, Freeze turns it ice blue, and the Shimmer character adds sparks.
+**The display** shows sound spreading in a room: rings travel out from the source in the middle, cyan for the algorithm and magenta for the space, each fading over its own decay and as bright as its share of the blend. The room's walls follow Size and light up with the wet level; dust drifts with Mod, Freeze stops the rings and turns them to ice, and the Shimmer character adds stars. A thin graph along the bottom shows both decays.
 
 ## How the engines work
 
@@ -39,7 +39,7 @@ Built for Bitwig Studio 6.1.7. The DSP is stored as Nitro source, which Bitwig c
 |---|---|
 | `hybrid_reverb.nitro` | The DSP, in Bitwig's Nitro language. Buffer sizes are `@…@` tokens that the build fills in |
 | `furnace.sksl` | The display (an SkSL shader), fed by three display outputs of the DSP |
-| `make_panel.py` | Draws the panel art (`panel_art.svg`: brushed steel, section plates, knob wells, logo), renders it with headless Chrome to `panel.png` and wraps it in `panel.svg`, which the device shows under its controls. Reads the layout from the build script |
+| `make_panel.py` | Draws the panel art (`panel_art.svg`: dark glass with coloured light, glass cards, knob rings, logo), renders it with headless Chrome to `panel.png` and wraps it in `panel.svg`, which the device shows under its controls. Reads the layout from the build script |
 | `panel.svg`, `panel.png`, `panel_art.svg` | The panel, as built by `make_panel.py` |
 | `build_hybrid_reverb.py` | The device description: controls, layout and look. Writes `out/Hybrid Reverb.bwdevice` and a copy here |
 | `test/sim_hybrid_reverb.py` | Runs the Nitro text itself offline, sample by sample: decay times, predelay, Freeze, stability of every character and IR type, equal loudness of the IR types, IR Decay, routing and EQ (`SIM_OK`) |
