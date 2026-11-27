@@ -16,7 +16,6 @@
 <line x1="302" y1="94" x2="698" y2="94" stroke="#38383b" stroke-width="1"/>
 <line x1="302" y1="95" x2="698" y2="95" stroke="#000" stroke-opacity=".5" stroke-width="1"/>
 <line x1="302" y1="164" x2="698" y2="164" stroke="#38383b" stroke-width="1"/>
-<text x="698" y="176" text-anchor="end" font-family="Helvetica Neue, Helvetica, Arial" font-size="7.5" letter-spacing="2" fill="#7a7a80">COLDFORGE</text>
 <text x="698" y="189" text-anchor="end" font-family="Helvetica Neue, Helvetica, Arial" font-size="10" font-weight="bold" letter-spacing="2" fill="#ffa448">SPECTRAL</text>
 <text x="698" y="202" text-anchor="end" font-family="Helvetica Neue, Helvetica, Arial" font-size="10" font-weight="bold" letter-spacing="2" fill="#ffa448">RESONATOR</text>
 </svg>

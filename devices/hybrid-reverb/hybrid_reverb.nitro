@@ -1,5 +1,5 @@
 // Hybrid Reverb: a "space" engine and an algorithmic engine, chained or in parallel.
-// Space: the impulse-response types of CF Hybrid Reverb (Hall, Room, Chamber, Plate, Spring, Cathedral,
+// Space: the impulse-response types of the Hybrid Reverb plug-in (Hall, Room, Chamber, Plate, Spring, Cathedral,
 //   Ambience), rebuilt as a real-time structure instead of a convolution: an early-reflection tap cluster
 //   and a diffuse tail from an 8-line network whose low, mid and high bands decay with the IR's own times,
 //   band-limited and tilted as the IR; Spring adds a resonant band and a dispersive 56 ms echo.
@@ -283,7 +283,7 @@ struct hybrid_reverb
         return v;
     }
 
-    // the impulse-response types (as CF Hybrid Reverb's IrSynth):
+    // the impulse-response types (as the Hybrid Reverb plug-in's IrSynth):
     // 0 Hall, 1 Room, 2 Chamber, 3 Plate, 4 Spring, 5 Cathedral, 6 Ambience
     f32 ir_tab(i32 t, i32 k)
     {

@@ -1,4 +1,4 @@
-# Coldforge Bitwig Mods
+# Bitwig Mods
 
 Mods for Bitwig Studio, loaded with [Patchbay](https://github.com/shaboogen-dev/Patchbay). Not affiliated with Bitwig GmbH.
 

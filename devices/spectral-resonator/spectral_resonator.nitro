@@ -1,4 +1,4 @@
-// Spectral Resonator (Coldforge).
+// Spectral Resonator.
 // The input excites a bank of 32 tuned resonators per channel. Their frequencies are the partials of
 // a pitch (Hz or MIDI note), optionally a 3-note chord, spread by Stretch and moved by Shift.
 // Each partial is a TPT state-variable band-pass whose bandwidth follows Decay, shortened for high

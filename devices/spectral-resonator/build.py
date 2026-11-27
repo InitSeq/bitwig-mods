@@ -1,4 +1,4 @@
-"""Build "Spectral Resonator.bwdevice" (Coldforge) with bo3K's device generator.
+"""Build "Spectral Resonator.bwdevice" with bo3K's device generator.
 python3 build.py  -> out/Spectral Resonator.bwdevice (and a copy next to this script)
 
 Needs Python 3.10+ and two MIT-licensed checkouts, in CF_VENDOR (default: ./vendor):
@@ -24,13 +24,13 @@ COL = [76 + 14 * i for i in range(7)]   # knob columns on the right side
 def spectral_resonator() -> Device:
     dev = Device(
         name="Spectral Resonator",
-        creator="Coldforge",
+        creator="InitSeq",
         uuid_key="coldforge/anvil",       # stable UUID: projects keep finding the device
         revision=VERSION,
         nitro=(HERE / "spectral_resonator.nitro").read_text(),
         description="Spectral resonator: the input rings 32 tuned partials per channel (Hz, note or chord), "
                     "with Stretch, Shift, damping, Chorus/Wander/Grain modulation, Unison and Hold",
-        tags="resonator spectral harmonic tuned metallic drone coldforge",
+        tags="resonator spectral harmonic tuned metallic drone",
         panel_size=(176, 53),
         prevent_sleep=True,
         knob_pie_color=1,                 # orange arcs

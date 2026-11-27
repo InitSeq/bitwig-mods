@@ -2,7 +2,7 @@
 
 > **Work in progress: not yet tried in Bitwig.** It builds and passes the offline test, but nobody has loaded it in Bitwig yet. Don't use it in projects yet.
 
-A native Bitwig device (not a plug-in): a spectral resonator by Coldforge. The input makes 32 tuned partials per channel ring, like struck metal. Loaded with [Patchbay](https://github.com/shaboogen-dev/Patchbay)'s **Framework: Nitro Devices**. Not affiliated with Bitwig GmbH.
+A native Bitwig device (not a plug-in): a spectral resonator. The input makes 32 tuned partials per channel ring, like struck metal. Loaded with [Patchbay](https://github.com/shaboogen-dev/Patchbay)'s **Framework: Nitro Devices**. Not affiliated with Bitwig GmbH.
 
 ## What it does
 
