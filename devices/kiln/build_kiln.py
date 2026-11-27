@@ -18,7 +18,7 @@ sys.path.insert(0, str(VENDOR / "bo-bitwig" / "tools" / "device-gen"))
 
 from bwgen import Device, Domain, Origin, ButtonStyle  # noqa: E402
 
-VERSION = 2  # metadata revision_no: raise it with each released change
+VERSION = 3  # metadata revision_no: raise it with each released change
 
 # delay buffer sizes in samples: lines, diffuser stages, early reflections and predelay, shifter
 FULL = dict(LN=32768, DF=8192, ER=16384, SH=4096)
@@ -62,16 +62,16 @@ def kiln(name="Kiln", uuid_key="coldforge/kiln", sizes=FULL, display=True, plain
   dev.choice("algo", "Character", ["Ember", "Glass", "Halo", "Drift", "Shard"], default=0, rect=(80, 1, 68, 4),
              buttons=not plain, tooltip="Ember: dark hall · Glass: bright, early reflections · Halo: octave shimmer · "
                                    "Drift: slow waves · Shard: short and metallic")
-  dev.param("decay", "Decay", 0.1, 60, 2.5, unit_text="s", domain=(Domain.LINEAR if plain else Domain.LOG), knob=(80, 8), knob_size=None if plain else 3)
+  dev.param("decay", "Decay", 0.1, 60, 2.5, unit_text="s", domain=(Domain.LINEAR if plain else Domain.CUBE_ROOT), knob=(80, 8), knob_size=None)
   dev.param("size", "Size", 0, 200, 100, unit_text="%", knob=(94, 8))
   dev.param("damping", "Damping", 0, 100, 40, unit_text="%", knob=(108, 8))
-  dev.param("mod", "Mod", 0, 100, 25, unit_text="%", knob=(122, 8))
+  dev.param("modulation", "Mod", 0, 100, 25, unit_text="%", knob=(122, 8))
   dev.param("shimmer", "Shimmer", 0, 100, 50, unit_text="%", knob=(136, 8))
   dev.param("predelay", "Predelay", 0, 250, 0, unit_text="ms", domain=(Domain.LINEAR if plain else Domain.CUBE_ROOT), knob=(80, 25))
-  dev.param("lowcut", "Low Cut", 20, 1000, 60, unit_text="Hz", domain=(Domain.LINEAR if plain else Domain.LOG), knob=(94, 25))
-  dev.param("highcut", "High Cut", 1000, 20000, 12000, unit_text="Hz", domain=(Domain.LINEAR if plain else Domain.LOG), knob=(108, 25))
+  dev.param("lowcut", "Low Cut", 20, 1000, 60, unit_text="Hz", domain=(Domain.LINEAR if plain else Domain.CUBE_ROOT), knob=(94, 25))
+  dev.param("highcut", "High Cut", 1000, 20000, 12000, unit_text="Hz", domain=(Domain.LINEAR if plain else Domain.CUBE_ROOT), knob=(108, 25))
   dev.param("width", "Width", 0, 200, 100, unit_text="%", knob=(122, 25))
-  dev.param("mix", "Mix", 0, 100, 35, unit_text="%", knob=(136, 25), knob_size=None if plain else 3)
+  dev.param("mix", "Mix", 0, 100, 35, unit_text="%", knob=(136, 25), knob_size=None)
   dev.toggle("freeze", "Freeze", default=False, button=(80, 43, 14, 5), style=ButtonStyle.BUTTON,
              tooltip="Holds the reverb tail and stops new input")
   dev.choice("vintage", "Vintage", ["Off", "Subtle", "Old", "Older", "Extreme"], default=0, rect=(97, 42, 22, 4),

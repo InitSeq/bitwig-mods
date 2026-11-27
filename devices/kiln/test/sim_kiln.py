@@ -16,7 +16,7 @@ sys.path.insert(0, str(HERE.parent))
 from build_kiln import nitro_text  # noqa: E402
 Component, CODE = nitro2py.load(nitro_text())
 FS = 48000
-DEFAULTS = dict(predelay=0.0, decay=2.5, size=100.0, damping=40.0, mod=25.0, shimmer=50.0,
+DEFAULTS = dict(predelay=0.0, decay=2.5, size=100.0, damping=40.0, modulation=25.0, shimmer=50.0,
                 lowcut=20.0, highcut=20000.0, width=100.0, mix=100.0, algo=0, vintage=0, freeze=False)
 failures = []
 
@@ -85,7 +85,7 @@ import random
 random.seed(1)
 for al in ([2] if quick else range(5)):
     out, c = run(lambda i: (random.uniform(-1, 1), random.uniform(-1, 1)), 0.6,
-                 algo=al, decay=60.0, size=200.0, mod=100.0, shimmer=100.0, damping=0.0, vintage=al % 5, width=200.0)
+                 algo=al, decay=60.0, size=200.0, modulation=100.0, shimmer=100.0, damping=0.0, vintage=al % 5, width=200.0)
     peak = max(max(abs(l), abs(r)) for l, r in out)
     print(f"algo {al}: peak {peak:.2f}")
     check(all(math.isfinite(l) and math.isfinite(r) for l, r in out), f"algo {al}: not finite")

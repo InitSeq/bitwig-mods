@@ -11,7 +11,7 @@ struct kiln
     audio_inport<f32> decay;
     audio_inport<f32> size;
     audio_inport<f32> damping;
-    audio_inport<f32> mod;
+    audio_inport<f32> modulation;
     audio_inport<f32> shimmer;
     audio_inport<f32> lowcut;
     audio_inport<f32> highcut;
@@ -479,7 +479,7 @@ struct kiln
         f32 d01 = 0.01 * clampf(damping, 0.0, 100.0);
         f32 cutoff = clampf((400.0 + 17600.0 * (1.0 - d01) * (1.0 - d01)) * a_damp(al), 200.0, fs * 0.45);
         f32 t_dc = exp(-6.283185307179586 * cutoff / fs);
-        f32 m01 = 0.01 * clampf(mod, 0.0, 100.0);
+        f32 m01 = 0.01 * clampf(modulation, 0.0, 100.0);
         f32 t_md = m01 * a_mdep(al) * 0.001 * fs;
         f32 t_gate = 1.0;
         if (freeze)
