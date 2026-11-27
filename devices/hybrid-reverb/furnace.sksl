@@ -1,7 +1,7 @@
-// Kiln: the furnace display.
+// Hybrid Reverb: the furnace display.
 // audioLow:    input level, wet level, decay (s), size factor (0.1 .. 2.5)
 // audioMedium: damping 0..1, freeze 0/1, algorithm 0..4, time (s)
-// audioHigh:   mod 0..1, shimmer 0..1, mix 0..1, width 0..2
+// audioHigh:   mod 0..1, shimmer 0..1, space decay (s), algorithm share 0..1
 uniform float4 audioLow;
 uniform float4 audioMedium;
 uniform float4 audioHigh;
@@ -37,7 +37,8 @@ half4 main(float2 fragCoord) {
     float time = audioMedium.w;
     float modA = audioHigh.x;
     float shim = audioHigh.y;
-    float width = audioHigh.w;
+    float spaceDecay = audioHigh.z;
+    float algoShare = audioHigh.w;
     float temp = 1. - .75 * damp;
 
     // the chamber: dark brick, an arch whose span follows Size
@@ -56,14 +57,22 @@ half4 main(float2 fragCoord) {
     float bed = exp(-uv.y * 9.) * (.15 + .85 * lvWet) * inside;
     col = col + kilnHeat(temp, ice) * bed * 1.4;
 
-    // the decay tail: time across the chamber, 60 dB down at the right edge for decay = view
-    float view = max(1., decay * 1.25);
+    // the two tails: time across the chamber. The algorithm's is a solid line of fire, the space's
+    // a fainter amber line; each as bright as its share of the blend
+    float view = max(1., max(decay, spaceDecay) * 1.25);
     float t = (uv.x - (.5 - span)) / (2. * span) * view;
-    float env = exp(-6.9 * t / max(decay, .1));
-    float curveY = .1 + .55 * env * (.35 + .65 * max(lvWet, .25));
     float onTail = (t > 0. && inside > 0.) ? 1. : 0.;
-    col = col + kilnHeat(temp * env, ice) * kilnLine(uv.y - curveY, .012) * onTail * 1.2;
-    col = col + kilnHeat(temp * env * .8, ice) * step(uv.y, curveY) * onTail * .18 * env;
+    float lift = .35 + .65 * max(lvWet, .25);
+    float env = exp(-6.9 * t / max(decay, .1));
+    float curveY = .1 + .55 * env * lift;
+    float aShare = .15 + .85 * algoShare;
+    col = col + kilnHeat(temp * env, ice) * kilnLine(uv.y - curveY, .012) * onTail * 1.2 * aShare;
+    col = col + kilnHeat(temp * env * .8, ice) * step(uv.y, curveY) * onTail * .18 * env * aShare;
+    float env2 = exp(-6.9 * t / max(spaceDecay, .05));
+    float curve2 = .1 + .5 * env2 * lift;
+    float sShare = .15 + .85 * (1. - algoShare);
+    float dash = step(.5, fract(uv.x * 40.));
+    col = col + float3(1., .62, .22) * kilnLine(uv.y - curve2, .009) * onTail * dash * .9 * sShare;
 
     // embers rising from the bed; many when loud, slow and wavy with Mod, frozen in place with Freeze
     float speed = (.05 + .12 * temp) * (1. - ice);
@@ -71,7 +80,7 @@ half4 main(float2 fragCoord) {
         float fi = float(i);
         float seed = kilnHash(fi + 1.);
         float alive = step(fi / 48., .15 + .85 * max(lvIn, lvWet * .8));
-        float px = .5 + (kilnHash(fi * 3.1) - .5) * 2. * span * clamp(width, .2, 2.) * .5;
+        float px = .5 + (kilnHash(fi * 3.1) - .5) * 2. * span * .5;
         float py = fract(seed + time * speed * (.6 + seed));
         px = px + modA * .03 * sin(time * (1. + seed * 2.) + fi);
         float2 d = float2((uv.x - px) * res.x / res.y, uv.y - (.05 + py * .8));

@@ -1,10 +1,15 @@
-// Kiln: algorithmic reverb (Coldforge). Port of the algorithm half of CF Hybrid Reverb.
-// in -> predelay -> early reflections -> input diffusers -> 8-line FDN (Householder, damping,
-//       30 Hz high-pass, decay gain, modulation, soft limit, octave shimmer) -> low/high cut
-//       -> width -> vintage -> equal-power dry/wet -> out
-// Parameters arrive in their own units: predelay ms, decay s, size/damping/mod/shimmer/width/mix %,
-// lowcut/highcut Hz. algo: 0 Ember, 1 Glass, 2 Halo, 3 Drift, 4 Shard. vintage: 0 off .. 4 extreme.
-struct kiln
+// Hybrid Reverb (Coldforge): a "space" engine and an algorithmic engine, chained or in parallel.
+// Space: the impulse-response types of CF Hybrid Reverb (Hall, Room, Chamber, Plate, Spring, Cathedral,
+//   Ambience), rebuilt as a real-time structure instead of a convolution: an early-reflection tap cluster
+//   and a diffuse tail from an 8-line network whose low, mid and high bands decay with the IR's own times,
+//   band-limited and tilted as the IR; Spring adds a resonant band and a dispersive 56 ms echo.
+//   IR Size stretches times, IR Decay shortens the tail, IR Attack fades the start in.
+// Algorithm: predelay -> early reflections -> diffusers -> 8-line FDN (Householder, damping, 30 Hz
+//   high-pass, decay gain, modulation, soft limit, octave shimmer).
+// Routing: 0 Serial (space feeds the algorithm), 1 Parallel, 2 Algorithm only, 3 Space only; Blend
+//   crossfades (equal power) space (0) to algorithm (100).
+// Wet: EQ (low/high cut 12 dB/oct, shelves 200 Hz / 5 kHz) -> width -> vintage -> dry/wet (Send: 100 % wet).
+struct hybrid_reverb
 {
     audio_inport<f32<2>> in;
     audio_inport<f32> predelay;
@@ -13,17 +18,27 @@ struct kiln
     audio_inport<f32> damping;
     audio_inport<f32> modulation;
     audio_inport<f32> shimmer;
+    audio_inport<f32> irsize;
+    audio_inport<f32> irattack;
+    audio_inport<f32> irdecay;
+    audio_inport<f32> blend;
     audio_inport<f32> lowcut;
     audio_inport<f32> highcut;
+    audio_inport<f32> lowshelf;
+    audio_inport<f32> highshelf;
     audio_inport<f32> width;
     audio_inport<f32> mix;
     value_inport<i32> algo;
+    value_inport<i32> irtype;
+    value_inport<i32> routing;
     value_inport<i32> vintage;
     value_inport<bool> freeze;
+    value_inport<bool> eqon;
+    value_inport<bool> send;
     audio_outport<f32<2>> out;
     audio_outport<f32<4>> ui_a;   // input level, wet level, decay (s), size factor
     audio_outport<f32<4>> ui_b;   // damping 0..1, freeze 0/1, algorithm, time (s)
-    audio_outport<f32<4>> ui_c;   // mod 0..1, shimmer 0..1, mix 0..1, width 0..2
+    audio_outport<f32<4>> ui_c;   // mod 0..1, shimmer 0..1, space decay (s), algorithm share 0..1
 
     // delay memory (sizes set by build_kiln.py): 8 lines, 8 diffuser stages, 2 ER, 2 predelay, the shifter
     f32[@LN8@] lines;
@@ -36,6 +51,58 @@ struct kiln
     i32 w_er = 0;
     i32 w_pd = 0;
     i32 w_sh = 0;
+
+    // space engine memory: 8 tail lines, 8 diffuser stages, the early-reflection/attack tap line, spring echo
+    f32[@LN8@] slines;
+    f32[@DF8@] sdifb;
+    f32[@TP2@] stap;
+    f32[16384] sprb;
+    i32 w_tap = 0;
+    i32 w_spr = 0;
+    f32[8] s_base;
+    f32[8] s_lo;
+    f32[8] s_bh;
+    f32[8] s_y;
+    f32[8] sd_ms;
+    f32[16] ertl;
+    f32[16] ertr;
+    f32[16] erg;
+    i32 er_n = 0;
+    i32 last_type = -1;
+    f32 last_stretch = -1.0;
+    f32 s_stretch = 1.0;
+    f32 s_att = 0.0;
+    f32 s_dec = 1.0;
+    f32 s_cg = 0.7;
+    f32 s_ag = 0.7;
+    f32 s_ser = 1.0;
+    f32 s_eq = 1.0;
+    f32 s_ls = 1.0;
+    f32 s_hs = 1.0;
+    f32 bp_x1l = 0.0;
+    f32 bp_x2l = 0.0;
+    f32 bp_y1l = 0.0;
+    f32 bp_y2l = 0.0;
+    f32 bp_x1r = 0.0;
+    f32 bp_x2r = 0.0;
+    f32 bp_y1r = 0.0;
+    f32 bp_y2r = 0.0;
+    f32[12] ap_l;
+    f32[12] ap_r;
+    f32 to_lol = 0.0;
+    f32 to_bhl = 0.0;
+    f32 to_lor = 0.0;
+    f32 to_bhr = 0.0;
+    f32 bl1l = 0.0;
+    f32 bl2l = 0.0;
+    f32 bl1r = 0.0;
+    f32 bl2r = 0.0;
+    f32 dcl = 0.0;
+    f32 dcr = 0.0;
+    f32 ls_l = 0.0;
+    f32 ls_r = 0.0;
+    f32 hs_l = 0.0;
+    f32 hs_r = 0.0;
 
     f32[8] base_ms;
     f32[8] out_sign;
@@ -180,6 +247,187 @@ struct kiln
             v = 0.2;
         if (a == 4)
             v = 0.0;
+        return v;
+    }
+
+    f32 pick14(i32 k, f32 a0, f32 a1, f32 a2, f32 a3, f32 a4, f32 a5, f32 a6, f32 a7, f32 a8, f32 a9,
+               f32 a10, f32 a11, f32 a12, f32 a13)
+    {
+        f32 v = a0;
+        if (k == 1)
+            v = a1;
+        if (k == 2)
+            v = a2;
+        if (k == 3)
+            v = a3;
+        if (k == 4)
+            v = a4;
+        if (k == 5)
+            v = a5;
+        if (k == 6)
+            v = a6;
+        if (k == 7)
+            v = a7;
+        if (k == 8)
+            v = a8;
+        if (k == 9)
+            v = a9;
+        if (k == 10)
+            v = a10;
+        if (k == 11)
+            v = a11;
+        if (k == 12)
+            v = a12;
+        if (k == 13)
+            v = a13;
+        return v;
+    }
+
+    // the impulse-response types (as CF Hybrid Reverb's IrSynth):
+    // 0 Hall, 1 Room, 2 Chamber, 3 Plate, 4 Spring, 5 Cathedral, 6 Ambience
+    f32 ir_tab(i32 t, i32 k)
+    {
+        // k: 0 t60 low, 1 t60 mid, 2 t60 high, 3 build-up ms, 4 low cut, 5 high cut, 6 ER count,
+        //    7 ER min ms, 8 ER max ms, 9 ER gain, 10 slap gain, 11 tilt low, 12 tilt high,
+        //    13 output level (measured offline so that every type sits at the same loudness)
+        f32 v = 0.0;
+        if (t == 0)
+            v = pick14(k, 3.0, 2.6, 1.3, 25.0, 40.0, 9000.0, 10.0, 15.0, 70.0, 0.45, 0.0, 1.2, 0.8, 1.2);
+        if (t == 1)
+            v = pick14(k, 0.8, 0.7, 0.45, 5.0, 60.0, 12000.0, 14.0, 3.0, 40.0, 0.9, 0.0, 1.0, 0.9, 0.63);
+        if (t == 2)
+            v = pick14(k, 1.6, 1.5, 0.9, 12.0, 50.0, 10000.0, 8.0, 8.0, 45.0, 0.5, 0.0, 1.1, 0.85, 1.32);
+        if (t == 3)
+            v = pick14(k, 2.0, 2.2, 1.7, 2.0, 120.0, 15000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7, 1.1, 1.74);
+        if (t == 4)
+            v = pick14(k, 1.5, 1.5, 0.8, 4.0, 150.0, 4500.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.6, 0.5, 5.88);
+        if (t == 5)
+            v = pick14(k, 4.5, 3.8, 1.6, 60.0, 35.0, 7000.0, 8.0, 40.0, 140.0, 0.4, 0.8, 1.3, 0.6, 1.06);
+        if (t == 6)
+            v = pick14(k, 0.3, 0.3, 0.2, 3.0, 80.0, 14000.0, 10.0, 2.0, 25.0, 0.7, 0.0, 0.9, 1.0, 0.81);
+        return v;
+    }
+
+    // a repeatable pseudo-random number 0..1 for n
+    f32 hash01(f32 n)
+    {
+        f32 x = sin(n * 12.9898) * 43758.5453;
+        return x - floor(x);
+    }
+
+    // the early-reflection cluster of an IR type at a stretch: tap times (ms) per channel and gains
+    i32 make_er(i32 t, f32 stretch)
+    {
+        i32 n = cast(ir_tab(t, 6), i32);
+        f32 mn = ir_tab(t, 7);
+        f32 mx = ir_tab(t, 8);
+        f32 g0 = ir_tab(t, 9);
+        i32 m = 0;
+        for (i32 k = 0; (k < 14); ++k)
+        {
+            if (k < n)
+            {
+                f32 den = cast(n - 1, f32);
+                if (den < 1.0)
+                    den = 1.0;
+                f32 frac = cast(k, f32) / den;
+                f32 base = cast(t * 31 + k * 7, f32);
+                f32 ms = mn + (mx - mn) * (frac * 0.7 + 0.3 * hash01(base + 0.1));
+                f32 jit = 0.35 * (0.4 + 0.6 * hash01(base + 0.2));
+                f32 sg = 1.0;
+                if (hash01(base + 0.3) < 0.5)
+                    sg = -1.0;
+                ertl[m] = (ms - jit) * stretch;
+                ertr[m] = (ms + jit) * stretch;
+                erg[m] = g0 * (1.0 - 0.6 * frac) * sg * (0.6 + 0.4 * hash01(base + 0.4));
+                m = m + 1;
+            }
+        }
+        f32 slap = ir_tab(t, 10);
+        if (slap > 0.0)
+        {
+            ertl[m] = 38.0 * stretch;
+            ertr[m] = 39.7 * stretch;
+            erg[m] = slap;
+            ertl[m + 1] = 77.0 * stretch;
+            ertr[m + 1] = 78.7 * stretch;
+            erg[m + 1] = -0.6 * slap;
+            m = m + 2;
+        }
+        return m;
+    }
+
+    // a fractional read of the space tap line (channel ch) d samples back
+    f32 rd_tap(i32 ch, f32 d)
+    {
+        f32 dd = clampf(d, 1.0, @TPM@);
+        i32 di = cast(floor(dd), i32);
+        f32 fr = dd - cast(di, f32);
+        i32 a = w_tap - di;
+        if (a < 0)
+            a = a + @TP@;
+        i32 b = a - 1;
+        if (b < 0)
+            b = b + @TP@;
+        return stap[ch * @TP@ + a] + fr * (stap[ch * @TP@ + b] - stap[ch * @TP@ + a]);
+    }
+
+    f32 rd_sline(i32 n, f32 d)
+    {
+        f32 dd = clampf(d, 1.0, @LNM@);
+        i32 di = cast(floor(dd), i32);
+        f32 fr = dd - cast(di, f32);
+        i32 a = w_line - di;
+        if (a < 0)
+            a = a + @LN@;
+        i32 b = a - 1;
+        if (b < 0)
+            b = b + @LN@;
+        return slines[n * @LN@ + a] + fr * (slines[n * @LN@ + b] - slines[n * @LN@ + a]);
+    }
+
+    f32 rd_sdif(i32 n, f32 d)
+    {
+        f32 dd = clampf(d, 1.0, @DFM@);
+        i32 di = cast(floor(dd), i32);
+        f32 fr = dd - cast(di, f32);
+        i32 a = w_dif - di;
+        if (a < 0)
+            a = a + @DF@;
+        i32 b = a - 1;
+        if (b < 0)
+            b = b + @DF@;
+        return sdifb[n * @DF@ + a] + fr * (sdifb[n * @DF@ + b] - sdifb[n * @DF@ + a]);
+    }
+
+    f32 rd_spr(i32 ch, f32 d)
+    {
+        f32 dd = clampf(d, 1.0, 8184.0);
+        i32 di = cast(floor(dd), i32);
+        f32 fr = dd - cast(di, f32);
+        i32 a = w_spr - di;
+        if (a < 0)
+            a = a + 8192;
+        i32 b = a - 1;
+        if (b < 0)
+            b = b + 8192;
+        return sprb[ch * 8192 + a] + fr * (sprb[ch * 8192 + b] - sprb[ch * 8192 + a]);
+    }
+
+    // one channel of the space diffuser: 4 all-pass stages, ch*4 .. ch*4+3
+    f32 sdiffuse(i32 ch, f32 x, f32 k, f32 scale, f32 fs)
+    {
+        f32 v = x;
+        for (i32 s = 0; (s < 4); ++s)
+        {
+            f32 ms = sd_ms[s];
+            if (ch == 1)
+                ms = sd_ms[s + 4];
+            f32 d = rd_sdif(ch * 4 + s, ms * 0.001 * scale * fs);
+            f32 u = v - k * d;
+            sdifb[(ch * 4 + s) * @DF@ + w_dif] = u;
+            v = d + k * u;
+        }
         return v;
     }
 
@@ -341,6 +589,37 @@ struct kiln
         }
         for (i32 i4 = 0; (i4 < @SH@); ++i4)
             shb[i4] = 0.0;
+        for (i32 i6 = 0; (i6 < @LN8@); ++i6)
+            slines[i6] = 0.0;
+        for (i32 i7 = 0; (i7 < @DF8@); ++i7)
+            sdifb[i7] = 0.0;
+        for (i32 i8 = 0; (i8 < @TP2@); ++i8)
+            stap[i8] = 0.0;
+        for (i32 i9 = 0; (i9 < 16384); ++i9)
+            sprb[i9] = 0.0;
+        for (i32 i10 = 0; (i10 < 12); ++i10)
+        {
+            ap_l[i10] = 0.0;
+            ap_r[i10] = 0.0;
+        }
+        s_base[0] = 23.3;
+        s_base[1] = 28.9;
+        s_base[2] = 33.7;
+        s_base[3] = 39.1;
+        s_base[4] = 44.9;
+        s_base[5] = 51.7;
+        s_base[6] = 59.3;
+        s_base[7] = 68.9;
+        sd_ms[0] = 3.1;
+        sd_ms[1] = 5.3;
+        sd_ms[2] = 7.9;
+        sd_ms[3] = 11.7;
+        sd_ms[4] = 3.4;
+        sd_ms[5] = 5.9;
+        sd_ms[6] = 7.3;
+        sd_ms[7] = 12.3;
+        last_type = -1;
+        last_stretch = -1.0;
         base_ms[0] = 29.7;
         base_ms[1] = 37.1;
         base_ms[2] = 41.9;
@@ -427,6 +706,9 @@ struct kiln
             hp_z[j] = 0.0;
             g_s[j] = 0.0;
             y[j] = 0.0;
+            s_lo[j] = 0.0;
+            s_bh[j] = 0.0;
+            s_y[j] = 0.0;
         }
         mod_phase = 0.0;
         sh_phase = 0.0;
@@ -493,10 +775,60 @@ struct kiln
         s_er = s_er + kc * (a_er(al) - s_er);
         s_sh = s_sh + kc * (0.35 * shim - s_sh);
         s_pd = s_pd + kc * (clampf(predelay, 0.0, 250.0) * 0.001 * fs - s_pd);
-        s_mix = s_mix + kc * (0.01 * clampf(mix, 0.0, 100.0) - s_mix);
+        f32 t_mix = 0.01 * clampf(mix, 0.0, 100.0);
+        if (send)
+            t_mix = 1.0;
+        s_mix = s_mix + kc * (t_mix - s_mix);
         s_width = s_width + kc * (0.01 * clampf(width, 0.0, 200.0) - s_width);
         s_lc = s_lc + kc * (clampf(lowcut, 20.0, 1000.0) - s_lc);
         s_hc = s_hc + kc * (clampf(highcut, 1000.0, fmin(20000.0, fs * 0.45)) - s_hc);
+        // space engine and routing targets
+        i32 it = irtype;
+        if (it < 0)
+            it = 0;
+        if (it > 6)
+            it = 6;
+        i32 rt = routing;
+        if (rt < 0)
+            rt = 0;
+        if (rt > 3)
+            rt = 3;
+        f32 t_stretch = 0.01 * clampf(irsize, 25.0, 200.0);
+        if (it != last_type || fabs(t_stretch - last_stretch) > 0.01)
+        {
+            er_n = make_er(it, t_stretch);
+            last_type = it;
+            last_stretch = t_stretch;
+        }
+        f32 bl01 = 0.01 * clampf(blend, 0.0, 100.0);
+        f32 t_cg = cos(1.5707963267948966 * bl01);
+        f32 t_ag = sin(1.5707963267948966 * bl01);
+        if (rt == 2)
+        {
+            t_cg = 0.0;
+            t_ag = 1.0;
+        }
+        if (rt == 3)
+        {
+            t_cg = 1.0;
+            t_ag = 0.0;
+        }
+        f32 t_ser = 0.0;
+        if (rt == 0)
+            t_ser = 1.0;
+        f32 t_eq = 0.0;
+        if (eqon)
+            t_eq = 1.0;
+        s_stretch = s_stretch + ks * (t_stretch - s_stretch);
+        s_att = s_att + kc * (0.01 * clampf(irattack, 0.0, 100.0) - s_att);
+        s_dec = s_dec + kc * (0.01 * clampf(irdecay, 10.0, 100.0) - s_dec);
+        s_cg = s_cg + kc * (t_cg - s_cg);
+        s_ag = s_ag + kc * (t_ag - s_ag);
+        s_ser = s_ser + kc * (t_ser - s_ser);
+        s_eq = s_eq + kc * (t_eq - s_eq);
+        s_ls = s_ls + kc * (exp(clampf(lowshelf, -15.0, 15.0) * 0.11512925464970229) - s_ls);
+        s_hs = s_hs + kc * (exp(clampf(highshelf, -15.0, 15.0) * 0.11512925464970229) - s_hs);
+
         f32 t_vamt = 0.0;
         f32 t_vinc = 1.0;
         if (vm > 0)
@@ -517,8 +849,140 @@ struct kiln
         // predelay
         pdb[w_pd] = dry_l;
         pdb[@ER@ + w_pd] = dry_r;
-        f32 in_l = rd_pd(0, s_pd) * s_gate;
-        f32 in_r = rd_pd(1, s_pd) * s_gate;
+        f32 pin_l = rd_pd(0, s_pd);
+        f32 pin_r = rd_pd(1, s_pd);
+
+        // ---- space engine ----
+        f32 st = s_stretch;
+        f32 t60l = fmax(0.05, ir_tab(it, 0) * st * s_dec);
+        f32 t60m = fmax(0.05, ir_tab(it, 1) * st * s_dec);
+        f32 t60h = fmax(0.05, ir_tab(it, 2) * st * s_dec);
+        stap[w_tap] = pin_l;
+        stap[@TP@ + w_tap] = pin_r;
+        // IR Attack: the tail starts later and the reflections fade out
+        f32 att_s = s_att * fmin(0.4 * t60m, 0.6);
+        f32 tin_l = rd_tap(0, 0.5 * att_s * fs + 1.0);
+        f32 tin_r = rd_tap(1, 0.5 * att_s * fs + 1.0);
+        f32 ers_l = 0.0;
+        f32 ers_r = 0.0;
+        for (i32 q = 0; (q < 16); ++q)
+        {
+            if (q < er_n)
+            {
+                ers_l = ers_l + erg[q] * rd_tap(0, ertl[q] * 0.001 * fs);
+                ers_r = ers_r + erg[q] * rd_tap(1, ertr[q] * 0.001 * fs);
+            }
+        }
+        ers_l = ers_l * (1.0 - s_att);
+        ers_r = ers_r * (1.0 - s_att);
+
+        // Spring: a resonant band around 2 kHz on the tail's input
+        if (it == 4)
+        {
+            f32 w0 = 6.283185307179586 * 2000.0 / fs;
+            f32 alpha = sin(w0) / 6.0;
+            f32 cs = cos(w0);
+            f32 ba0 = 1.0 + alpha;
+            f32 bpl = (alpha * tin_l - alpha * bp_x2l + 2.0 * cs * bp_y1l - (1.0 - alpha) * bp_y2l) / ba0;
+            bp_x2l = bp_x1l;
+            bp_x1l = tin_l;
+            bp_y2l = bp_y1l;
+            bp_y1l = bpl;
+            f32 bpr = (alpha * tin_r - alpha * bp_x2r + 2.0 * cs * bp_y1r - (1.0 - alpha) * bp_y2r) / ba0;
+            bp_x2r = bp_x1r;
+            bp_x1r = tin_r;
+            bp_y2r = bp_y1r;
+            bp_y1r = bpr;
+            tin_l = 0.45 * bpl + 0.25 * tin_l;
+            tin_r = 0.45 * bpr + 0.25 * tin_r;
+        }
+
+        // diffusion: the IR's build-up time sets how long and dense it is
+        f32 bms = ir_tab(it, 3);
+        f32 sk = 0.55 + 0.2 * clampf(bms / 60.0, 0.0, 1.0);
+        f32 sscale = (0.6 + bms / 25.0) * st;
+        f32 sdl = sdiffuse(0, tin_l, sk, sscale, fs) * 0.5;
+        f32 sdr = sdiffuse(1, tin_r, sk, sscale, fs) * 0.5;
+
+        // the diffuse tail: 8 lines, each band decaying with its own time
+        f32 a300 = 1.0 - exp(-6.283185307179586 * 300.0 / fs);
+        f32 a3k = 1.0 - exp(-6.283185307179586 * 3000.0 / fs);
+        f32 ssum = 0.0;
+        f32 tl = 0.0;
+        f32 tr = 0.0;
+        for (i32 n = 0; (n < 8); ++n)
+        {
+            f32 slen = s_base[n] * 0.001 * st;
+            f32 sv = rd_sline(n, slen * fs);
+            s_lo[n] = s_lo[n] + a300 * (sv - s_lo[n]);
+            s_bh[n] = s_bh[n] + a3k * (sv - s_bh[n]);
+            f32 glo = exp(-6.907755278982137 * slen / t60l);
+            f32 gmi = exp(-6.907755278982137 * slen / t60m);
+            f32 ghi = exp(-6.907755278982137 * slen / t60h);
+            sv = glo * s_lo[n] + gmi * (s_bh[n] - s_lo[n]) + ghi * (sv - s_bh[n]);
+            sv = soft_limit(sv);
+            s_y[n] = sv;
+            ssum = ssum + sv;
+            if (n == 1 || n == 3 || n == 5 || n == 7)
+                tr = tr + out_sign[n] * sv;
+            else
+                tl = tl + out_sign[n] * sv;
+        }
+        f32 sh2 = ssum * 0.25;
+        for (i32 n2 = 0; (n2 < 8); ++n2)
+        {
+            f32 sinj = sdl;
+            if (n2 == 1 || n2 == 3 || n2 == 5 || n2 == 7)
+                sinj = sdr;
+            slines[n2 * @LN@ + w_line] = s_y[n2] - sh2 + in_sign[n2] * sinj;
+        }
+        tl = tl * 0.5;
+        tr = tr * 0.5;
+
+        // Spring: a dispersive echo every 56 ms (59 ms right), highs arriving first
+        if (it == 4)
+        {
+            f32 el = rd_spr(0, 0.056 * st * fs);
+            f32 erw = rd_spr(1, 0.059 * st * fs);
+            for (i32 j2 = 0; (j2 < 6); ++j2)
+            {
+                f32 yl = -0.6 * el + ap_l[j2];
+                ap_l[j2] = el + 0.6 * yl;
+                el = yl;
+                f32 yr = -0.6 * erw + ap_r[j2];
+                ap_r[j2] = erw + 0.6 * yr;
+                erw = yr;
+            }
+            sprb[w_spr] = tin_l + 0.78 * el;
+            sprb[8192 + w_spr] = tin_r + 0.78 * erw;
+            tl = tl + 0.5 * el;
+            tr = tr + 0.5 * erw;
+        }
+
+        // the IR's tilt (low and high bands against the mid) and band limits
+        to_lol = to_lol + a300 * (tl - to_lol);
+        to_bhl = to_bhl + a3k * (tl - to_bhl);
+        tl = ir_tab(it, 11) * to_lol + (to_bhl - to_lol) + ir_tab(it, 12) * (tl - to_bhl);
+        to_lor = to_lor + a300 * (tr - to_lor);
+        to_bhr = to_bhr + a3k * (tr - to_bhr);
+        tr = ir_tab(it, 11) * to_lor + (to_bhr - to_lor) + ir_tab(it, 12) * (tr - to_bhr);
+        f32 spl = tl + ers_l;
+        f32 spr = tr + ers_r;
+        f32 blc = exp(-6.283185307179586 * fmin(ir_tab(it, 5), fs * 0.45) / fs);
+        bl1l = spl + blc * (bl1l - spl);
+        bl2l = bl1l + blc * (bl2l - bl1l);
+        bl1r = spr + blc * (bl1r - spr);
+        bl2r = bl1r + blc * (bl2r - bl1r);
+        f32 dca = 1.0 - exp(-6.283185307179586 * ir_tab(it, 4) / fs);
+        dcl = dcl + dca * (bl2l - dcl);
+        dcr = dcr + dca * (bl2r - dcr);
+        f32 lev = ir_tab(it, 13);
+        spl = (bl2l - dcl) * lev;
+        spr = (bl2r - dcr) * lev;
+
+        // ---- the algorithm: fed by the space engine in Serial, by the input otherwise ----
+        f32 in_l = (pin_l + s_ser * (spl - pin_l)) * s_gate;
+        f32 in_r = (pin_r + s_ser * (spr - pin_r)) * s_gate;
 
         // early reflections
         erb[w_er] = in_l;
@@ -586,8 +1050,10 @@ struct kiln
             lines[i5 * @LN@ + w_line] = y[i5] - h + in_sign[i5] * inj + shim_sign[i5] * ps;
         }
 
-        f32 wet_l = wl * 0.5 + s_er * erl;
-        f32 wet_r = wr * 0.5 + s_er * err;
+        f32 wet_l = s_cg * spl + s_ag * (wl * 0.5 + s_er * erl);
+        f32 wet_r = s_cg * spr + s_ag * (wr * 0.5 + s_er * err);
+        f32 pre_l = wet_l;
+        f32 pre_r = wet_r;
 
         // low cut and high cut: 12 dB/oct TPT state-variable filters
         f32 kq = 1.4142135623730951;
@@ -624,6 +1090,20 @@ struct kiln
         hc1_r = 2.0 * hrv1 - hc1_r;
         hc2_r = 2.0 * hrv2 - hc2_r;
         wet_r = hrv2;
+
+        // shelves: first order at 200 Hz and 5 kHz
+        f32 a200 = 1.0 - exp(-6.283185307179586 * 200.0 / fs);
+        f32 a5k = 1.0 - exp(-6.283185307179586 * 5000.0 / fs);
+        ls_l = ls_l + a200 * (wet_l - ls_l);
+        ls_r = ls_r + a200 * (wet_r - ls_r);
+        wet_l = wet_l + (s_ls - 1.0) * ls_l;
+        wet_r = wet_r + (s_ls - 1.0) * ls_r;
+        hs_l = hs_l + a5k * (wet_l - hs_l);
+        hs_r = hs_r + a5k * (wet_r - hs_r);
+        wet_l = wet_l + (s_hs - 1.0) * (wet_l - hs_l);
+        wet_r = wet_r + (s_hs - 1.0) * (wet_r - hs_r);
+        wet_l = pre_l + s_eq * (wet_l - pre_l);
+        wet_r = pre_r + s_eq * (wet_r - pre_r);
 
         // width (mid/side)
         f32 mid = 0.5 * (wet_l + wet_r);
@@ -668,6 +1148,12 @@ struct kiln
         w_sh = w_sh + 1;
         if (w_sh >= @SH@)
             w_sh = 0;
+        w_tap = w_tap + 1;
+        if (w_tap >= @TP@)
+            w_tap = 0;
+        w_spr = w_spr + 1;
+        if (w_spr >= 8192)
+            w_spr = 0;
 
         // display data
         f32 att = 1.0 - exp(-1.0 / (0.01 * fs));
@@ -698,7 +1184,7 @@ struct kiln
         ui_b[3] = clock;
         ui_c[0] = m01;
         ui_c[1] = shim;
-        ui_c[2] = s_mix;
-        ui_c[3] = s_width;
+        ui_c[2] = t60m;
+        ui_c[3] = s_ag * s_ag / fmax(0.0001, s_ag * s_ag + s_cg * s_cg);
     }
 }

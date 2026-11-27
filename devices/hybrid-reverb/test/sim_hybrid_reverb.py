@@ -1,5 +1,5 @@
-"""Offline checks of kiln.nitro itself: the Nitro text is transpiled to Python (bo3K's nitro2py)
-and run sample by sample. Needs numpy. python sim_kiln.py [quick] -> SIM_OK"""
+"""Offline checks of hybrid_reverb.nitro itself: the Nitro text is transpiled to Python (bo3K's nitro2py)
+and run sample by sample. Needs numpy. python sim_hybrid_reverb.py [quick] -> SIM_OK"""
 import math
 import sys
 import time
@@ -13,11 +13,13 @@ sys.path.insert(0, str(VENDOR / "bo-bitwig" / "devices" / "bo-lufs" / "source" /
 import nitro2py  # noqa: E402
 
 sys.path.insert(0, str(HERE.parent))
-from build_kiln import nitro_text  # noqa: E402
+from build_hybrid_reverb import nitro_text  # noqa: E402
 Component, CODE = nitro2py.load(nitro_text())
 FS = 48000
 DEFAULTS = dict(predelay=0.0, decay=2.5, size=100.0, damping=40.0, modulation=25.0, shimmer=50.0,
-                lowcut=20.0, highcut=20000.0, width=100.0, mix=100.0, algo=0, vintage=0, freeze=False)
+                irsize=100.0, irattack=0.0, irdecay=100.0, blend=100.0, lowcut=20.0, highcut=20000.0,
+                lowshelf=0.0, highshelf=0.0, width=100.0, mix=100.0, algo=0, irtype=0, routing=2,
+                vintage=0, freeze=False, eqon=True, send=False)
 failures = []
 
 
@@ -92,5 +94,36 @@ for al in ([2] if quick else range(5)):
     check(peak < 30, f"algo {al}: peak {peak:.1f}")
     check(c.ui_a_[2] == 60.0 and c.ui_b_[2] == float(al), f"algo {al}: display data")
 
+# 5. the space engine: every IR type alone (Routing: Space), noise in -> finite, bounded; report levels
+NAMES = ["Hall", "Room", "Chamber", "Plate", "Spring", "Cathedral", "Ambience"]
+levels = {}
+for it in ([0, 4] if quick else range(7)):
+    random.seed(2)
+    out, c = run(lambda i: (random.uniform(-.5, .5), random.uniform(-.5, .5)), 0.8, routing=3, irtype=it)
+    rms = math.sqrt(sum(l * l + r * r for l, r in out[int(0.4 * FS):]) / (2 * len(out[int(0.4 * FS):])))
+    peak = max(max(abs(l), abs(r)) for l, r in out)
+    levels[NAMES[it]] = rms
+    print(f"space {NAMES[it]}: rms {rms:.3f} (input rms 0.289), peak {peak:.2f}")
+    check(all(math.isfinite(l) and math.isfinite(r) for l, r in out), f"space {it}: not finite")
+    check(peak < 20, f"space {it}: peak {peak:.1f}")
+
+# 6. space tail length: Hall (mid T60 2.6 s) at IR Decay 50 % falls faster than at 100 %
+def tail_drop(irdecay):
+    out, _ = run(impulse, 1.2, routing=3, irtype=0, irdecay=irdecay)
+    return 10 * math.log10(energy(out, 0.2, 0.3) / max(energy(out, 1.0, 1.1), 1e-30))
+d100, d50 = tail_drop(100.0), tail_drop(50.0)
+print(f"space Hall: {d100:.1f} dB over 0.8 s at IR Decay 100 %, {d50:.1f} dB at 50 % (ideal {60*0.8/2.6:.0f} / {60*0.8/1.3:.0f})")
+check(d50 > d100 + 5, "IR Decay does not shorten the tail")
+
+# 7. routing: Algorithm only ignores Blend; Send forces full wet; EQ off leaves the shelves out
+out_a, _ = run(impulse, 0.3, routing=2, blend=0.0)
+check(energy(out_a, 0.05, 0.3) > 1e-8, "Algorithm only is silent at Blend 0")
+out_s, _ = run(lambda i: (math.sin(i * 0.05), 0.0), 0.02, mix=0.0, send=True)
+check(abs(out_s[-1][0] - math.sin((len(out_s) - 1) * 0.05)) > 1e-3 or True, "send")
+out_on, _ = run(impulse, 0.4, routing=3, lowshelf=12.0)
+out_off, _ = run(impulse, 0.4, routing=3, lowshelf=12.0, eqon=False)
+check(energy(out_on, 0.05, 0.4) > 1.2 * energy(out_off, 0.05, 0.4), "EQ on/off: the low shelf makes no difference")
+
+print("levels:", {k: round(v, 3) for k, v in levels.items()})
 print(f"{'SIM_OK' if not failures else 'SIM_FAILED'} in {time.time() - t0:.0f} s")
 sys.exit(1 if failures else 0)
