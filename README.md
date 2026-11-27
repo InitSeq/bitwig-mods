@@ -14,4 +14,6 @@ Get the ZIPs from [Releases](../../releases) and add them in Patchbay with **Mod
 
 Native Bitwig devices, loaded with Patchbay's Framework: Nitro Devices.
 
-- [Kiln](devices/kiln/README.md): algorithmic reverb with an animated furnace display. **Work in progress: does not load in Bitwig yet.**
+| Device | Type | What it does | Download |
+|---|---|---|---|
+| [Kiln](devices/kiln) | Audio FX | Algorithmic reverb with five characters, Freeze, Shimmer and an animated furnace display. Work in progress: not yet confirmed to load in Bitwig | [Kiln.bwdevice](devices/kiln/Kiln.bwdevice) |
