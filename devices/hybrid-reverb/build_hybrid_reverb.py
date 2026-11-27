@@ -18,7 +18,7 @@ sys.path.insert(0, str(VENDOR / "bo-bitwig" / "tools" / "device-gen"))
 
 from bwgen import Device, Domain, Origin, ButtonStyle  # noqa: E402
 
-VERSION = 6  # metadata revision_no: raise it with each released change
+VERSION = 7  # metadata revision_no: raise it with each released change
 
 # delay buffer sizes in samples: lines, diffuser stages, early reflections and predelay, shifter
 FULL = dict(LN=32768, DF=8192, ER=16384, SH=4096, TP=32768)

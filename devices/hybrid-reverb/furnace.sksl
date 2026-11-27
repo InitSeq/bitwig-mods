@@ -1,8 +1,7 @@
-// Hybrid Reverb: the ripple display. Sound spreads from the centre as rings in a room whose walls are
-// set by Size: cyan rings for the algorithm, magenta for the space, each fading over its own decay and
-// as bright as its share of the blend. Walls light up where the rings reach them. Dust drifts with Mod;
-// Freeze stops the rings and turns them to ice; the Shimmer character adds stars. A thin decay graph
-// runs along the bottom.
+// Hybrid Reverb: the meter bridge. Two VU meters (input and reverb) whose needles swing with the levels,
+// a warm backlight that brightens with the reverb, and two jewel lamps: Freeze (red) and Shimmer (amber,
+// with the Shimmer algorithm). The faces, scales and lamps are printed in the panel; this draws only
+// what moves, over a transparent background. Geometry in display heights, as in make_panel.py.
 // audioLow:    input level, wet level, decay (s), size factor (0.1 .. 2.5)
 // audioMedium: damping 0..1, freeze 0/1, algorithm 0..4, time (s)
 // audioHigh:   mod 0..1, shimmer 0..1, space decay (s), algorithm share 0..1
@@ -10,118 +9,69 @@ uniform float4 audioLow;
 uniform float4 audioMedium;
 uniform float4 audioHigh;
 
-float nbHash(float n) {
-    return fract(sin(n * 12.9898) * 43758.5453);
+// 0..1 along the scale for a level: 0 VU = -14 dBFS, scale -20 .. +3 VU, linear in voltage
+float vuPos(float lvl) {
+    float vu = 20. * log(max(lvl, .0000001)) * .4342944819 + 14.;
+    vu = clamp(vu, -23., 4.5);
+    float lo = .1;
+    float hi = 1.4125375;
+    return (exp(vu * .1151292546) - lo) / (hi - lo);
 }
 
-// 0..1 from a level (linear), over 60 dB
-float nbDb(float a) {
-    return clamp(1. + log(max(a, .000001)) * .1448, 0., 1.);
+float vuSeg(float2 p, float2 a, float2 b) {
+    float2 pa = p - a;
+    float2 ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0., 1.);
+    return length(pa - ba * h);
 }
 
-float nbLine(float d, float w) {
-    return clamp(1. - abs(d) / w, 0., 1.);
+// one meter: returns rgb (premultiplied) and alpha of what it draws over the printed face
+float4 vuMeter(float2 p, float fx, float fw, float lvl, float glow, float px) {
+    float fy = .06;
+    float fh = .62;
+    float inFace = (p.x > fx && p.x < fx + fw && p.y > fy && p.y < fy + fh) ? 1. : 0.;
+    float2 pivot = float2(fx + fw * .5, fy + fh + .15);
+    float a = radians(-48. + 96. * clamp(vuPos(lvl), -.04, 1.04));
+    float2 dir = float2(sin(a), -cos(a));
+    float2 tip = pivot + dir * .56;
+    float d = vuSeg(p, pivot, tip);
+    float needle = clamp(1. - (d - .003) / px, 0., 1.) * inFace;
+    float shadow = clamp(1. - (vuSeg(p - float2(.006, .008), pivot, tip) - .004) / (px * 3.), 0., 1.) * inFace * .25;
+    float2 c = float2((p.x - (fx + fw * .5)) / fw, (p.y - (fy + fh * .75)) / fh);
+    float light = exp(-dot(c, c) * 3.) * inFace * glow;
+    float4 col = float4(1., .62, .22, 1.) * light * .35;
+    col = col * (1. - shadow) + float4(0., 0., 0., shadow);
+    col = col * (1. - needle) + float4(.08, .06, .05, 1.) * needle;
+    return col;
 }
 
-// rings of one engine: n rings spaced in time, each fading with the decay; returns brightness
-float nbRings(float r, float maxR, float t, float decay, float rate, float width) {
-    float sum = 0.;
-    for (int k = 0; k < 7; k++) {
-        float age = fract(t * rate + float(k) / 7.);
-        float radius = age * maxR;
-        float seconds = age / rate;
-        float fade = exp(-6.9 * seconds / max(decay, .05)) * (1. - age);
-        sum = sum + (nbLine(r - radius, width) + .35 * exp(-abs(r - radius) / (width * 4.))) * fade;
-    }
-    return sum;
+float4 lamp(float2 p, float2 c, float on, float3 colr, float px) {
+    float r = length(p - c);
+    float core = clamp(1. - (r - .022) / px, 0., 1.) * on;
+    float halo = exp(-r * r * 900.) * on * .6;
+    float a = clamp(core + halo, 0., 1.);
+    return float4(colr * a, a);
 }
 
 half4 main(float2 fragCoord) {
     float2 res = iResolution.xy;
-    float2 p = float2(fragCoord.x - res.x * .5, res.y * .46 - fragCoord.y) / res.y;
-    float lvIn = nbDb(audioLow.x);
-    float lvWet = nbDb(audioLow.y);
-    float decay = max(audioLow.z, .1);
-    float size = clamp(audioLow.w / 2.5, 0., 1.);
-    float damp = audioMedium.x;
+    float px = 1. / res.y;
+    float2 p = fragCoord / res.y;
+    float mid = res.x / res.y * .5;
+    float lvIn = audioLow.x;
+    float lvWet = audioLow.y;
     float ice = audioMedium.y;
     float algo = audioMedium.z;
-    float time = audioMedium.w;
-    float modA = audioHigh.x;
     float shim = audioHigh.y;
-    float spaceDecay = max(audioHigh.z, .05);
-    float share = audioHigh.w;
+    float glow = .55 + .45 * clamp(vuPos(lvWet), 0., 1.);
 
-    float3 cyan = mix(float3(.25, .9, 1.), float3(.9, .97, 1.), ice);
-    float3 magenta = mix(float3(1., .3, .72), float3(.82, .9, 1.), ice);
-    float3 violet = float3(.55, .42, 1.);
-
-    // background: deep blue-violet with a soft light in the middle
-    float r = length(p);
-    float3 col = float3(.012, .016, .04) + violet * .10 * exp(-r * r * 6.) + cyan * .04 * exp(-r * r * 2.);
-
-    // the room: a rounded rectangle whose size follows Size; its walls glow with the wet level
-    float2 room = float2(.55 + .55 * size, .26 + .14 * size);
-    float2 q = abs(p) - room + float2(.06, .06);
-    float wall = length(max(q, float2(0., 0.))) + min(max(q.x, q.y), 0.) - .06;
-    float wallGlow = nbLine(wall, .006) * (.25 + .9 * lvWet) + exp(-abs(wall) * 60.) * .25 * lvWet;
-    col = col + mix(violet, cyan, .5 + .5 * sin(atan(p.y, p.x) * 2. + time * .3)) * wallGlow;
-    float inside = wall < 0. ? 1. : 0.;
-
-    // grid on the floor of the room
-    float grid = max(nbLine(fract(p.x * 10.) - .5, .02), nbLine(fract(p.y * 10.) - .5, .02));
-    col = col + violet * grid * .035 * inside;
-
-    // the rings: frozen in place with Freeze, a little blurred by Damping
-    float t = time * (1. - ice) + ice * 7.3;
-    float maxR = length(room) * 1.05;
-    float wid = .008 + .01 * damp;
-    float amp = .35 + .9 * max(lvWet, lvIn * .6);
-    float ringA = nbRings(r, maxR, t, decay, .55, wid) * (.15 + .85 * share);
-    float ringS = nbRings(r, maxR, t + .37, spaceDecay, .8, wid * 1.6) * (.15 + .85 * (1. - share));
-    col = col + cyan * ringA * amp * 2. * inside;
-    col = col + magenta * ringS * amp * 1.5 * inside;
-
-    // the source in the middle, pulsing with the input
-    col = col + mix(cyan, float3(1., 1., 1.), .5) * exp(-r * r * (900. - 600. * lvIn)) * (.4 + 1.2 * lvIn);
-
-    // dust drifting with Mod
-    for (int i = 0; i < 40; i++) {
-        float fi = float(i);
-        float2 d0 = float2(nbHash(fi) - .5, nbHash(fi + 9.1) - .5) * room * 2.;
-        float ang = time * (.05 + .25 * modA) * (nbHash(fi + 3.) - .5) * 4. * (1. - ice);
-        float2 dp = float2(d0.x * cos(ang) - d0.y * sin(ang), d0.x * sin(ang) + d0.y * cos(ang));
-        float2 d = p - dp;
-        float tw = .5 + .5 * sin(time * (1. + 3. * nbHash(fi + 5.)) + fi);
-        col = col + mix(cyan, magenta, nbHash(fi + 2.)) * exp(-dot(d, d) * 40000.) * tw * (.25 + .75 * lvWet) * inside;
-    }
-
-    // stars of the Shimmer character
-    float stars = (algo > 1.5 && algo < 2.5) ? shim : 0.;
-    for (int j = 0; j < 18; j++) {
-        float fj = float(j);
-        float2 sp = float2(nbHash(fj * 7.7) - .5, nbHash(fj * 1.3) - .5) * room * 1.8;
-        float tw = pow(.5 + .5 * sin(time * (2. + 4. * nbHash(fj)) + fj * 2.), 4.);
-        float2 d = p - sp;
-        float crs = exp(-abs(d.x) * 400.) * exp(-abs(d.y) * 60.) + exp(-abs(d.y) * 400.) * exp(-abs(d.x) * 60.);
-        col = col + float3(1., .95, 1.) * (crs * .6 + exp(-dot(d, d) * 20000.)) * tw * stars * (.3 + .7 * lvWet);
-    }
-
-    // the decay graph along the bottom: both engines, 0..60 dB over the longer decay
-    float2 uv = float2(fragCoord.x / res.x, 1. - fragCoord.y / res.y);
-    float view = max(1., max(decay, spaceDecay) * 1.1);
-    float gt = (uv.x - .06) / .88 * view;
-    float gh = .085;
-    float onG = (gt > 0. && uv.x < .94) ? 1. : 0.;
-    float ya = .035 + gh * exp(-6.9 * gt / decay);
-    float ys = .035 + gh * exp(-6.9 * gt / spaceDecay);
-    col = col + cyan * nbLine((uv.y - ya) * res.y, 1.2) * onG * (.3 + .7 * share);
-    col = col + magenta * nbLine((uv.y - ys) * res.y, 1.2) * onG * (.3 + .7 * (1. - share));
-    col = col + float3(1., 1., 1.) * nbLine((uv.y - .035) * res.y, .6) * onG * .12;
-
-    // frost in Freeze
-    float frost = ice * clamp(r * r * 1.6 - .1, 0., 1.) * (.5 + .5 * nbHash(floor(fragCoord.x * .5) * 7. + floor(fragCoord.y * .5) * 131.));
-    col = mix(col, float3(.85, .93, 1.), frost * .35);
-
-    return half4(half3(col), 1.);
+    float4 col = vuMeter(p, .03, .84, lvIn, glow, px);
+    float4 m2 = vuMeter(p, .892, .84, lvWet, glow, px);
+    col = m2 + col * (1. - m2.a);
+    float4 l1 = lamp(p, float2(mid - .12, .87), ice, float3(1., .18, .1), px);
+    col = l1 + col * (1. - l1.a);
+    float sh = (algo > 1.5 && algo < 2.5) ? (.25 + .75 * shim) : 0.;
+    float4 l2 = lamp(p, float2(mid + .12, .87), sh, float3(1., .7, .2), px);
+    col = l2 + col * (1. - l2.a);
+    return half4(col);
 }
