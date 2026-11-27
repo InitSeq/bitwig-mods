@@ -1,0 +1,414 @@
+// Spectral Resonator (Coldforge).
+// The input excites a bank of 32 tuned resonators per channel. Their frequencies are the partials of
+// a pitch (Hz or MIDI note), optionally a 3-note chord, spread by Stretch and moved by Shift.
+// Each partial is a TPT state-variable band-pass whose bandwidth follows Decay, shortened for high
+// (HF Damp) and low (LF Damp) partials. Modulation: Chorus (LFO detune), Wander (random drift),
+// Grain (random partial bursts). Unison detunes left against right. Hold freezes the ringing.
+// in -> input gain -> 2 x 32 resonators -> soft limit -> equal-power dry/wet -> out
+// Parameters arrive in their own units: freq Hz, note 0..127, decay s, hfdamp/lfdamp/modamt/unison/mix %,
+// stretch/oddeven -100..100 %, shift semitones, modrate Hz, drive dB (input gain).
+// pmode: 0 Hz, 1 Note. chord: 0 Single, 1 Octaves, 2 Fifths, 3 Major, 4 Minor, 5 Sus.
+// modtype: 0 None, 1 Chorus, 2 Wander, 3 Grain.
+struct spectral_resonator
+{
+    audio_inport<f32<2>> in;
+    audio_inport<f32> freq;
+    audio_inport<f32> note;
+    audio_inport<f32> decay;
+    audio_inport<f32> hfdamp;
+    audio_inport<f32> lfdamp;
+    audio_inport<f32> stretch;
+    audio_inport<f32> shift;
+    audio_inport<f32> oddeven;
+    audio_inport<f32> unison;
+    audio_inport<f32> modamt;
+    audio_inport<f32> modrate;
+    audio_inport<f32> drive;
+    audio_inport<f32> mix;
+    value_inport<i32> pmode;
+    value_inport<i32> chord;
+    value_inport<i32> modtype;
+    value_inport<bool> hold;
+    audio_outport<f32<2>> out;
+    audio_outport<f32<4>> ui_a;   // input level, wet level, fundamental (Hz, with shift), decay (s)
+    audio_outport<f32<4>> ui_b;   // stretch -1..1, chord, unison 0..1, time (s)
+    audio_outport<f32<4>> ui_c;   // hold + 2 * modtype, mod amount 0..1, odd/even -1..1, HF damp 0..1
+
+    // per partial: filter coefficients left/right, output gain, filter states
+    f32[32] a1l;
+    f32[32] a2l;
+    f32[32] a3l;
+    f32[32] a1r;
+    f32[32] a2r;
+    f32[32] a3r;
+    f32[32] og;
+    f32[32] og_t;
+    f32[32] s1l;
+    f32[32] s2l;
+    f32[32] s1r;
+    f32[32] s2r;
+    // per partial modulation
+    f32[32] lfo_mul;
+    f32[32] lfo_off;
+    f32[32] w_cur;
+    f32[32] w_tgt;
+    f32[32] w_timer;
+    f32[32] g_env;
+
+    i32 tick = 0;          // control-rate counter: coefficients are recomputed every 16 samples
+    i32 started = 0;
+    i32 snap = 0;
+    f32 s_lp = 7.78;       // smoothed log2 of the fundamental
+    f32 s_gate = 1.0;
+    f32 s_mix = 0.5;
+    f32 s_in = 1.0;
+    f32 lfo_ph = 0.0;
+    f32 rnd_n = 0.0;
+    f32 clock = 0.0;
+    f32 lvl_in = 0.0;
+    f32 lvl_wet = 0.0;
+    f32 ui_f0 = 220.0;
+
+    f32 clampf(f32 x, f32 lo, f32 hi)
+    {
+        return fmax(lo, fmin(hi, x));
+    }
+
+    f32 frac01(f32 x)
+    {
+        return x - floor(x);
+    }
+
+    // pseudo-random 0..1
+    f32 rnd()
+    {
+        rnd_n = rnd_n + 1.0;
+        if (rnd_n > 9000.0)
+            rnd_n = rnd_n - 9000.0;
+        return frac01(sin(rnd_n * 12.9898 + 0.731) * 43758.5453);
+    }
+
+    f32 pow2(f32 x)
+    {
+        return exp(x * 0.6931471805599453);
+    }
+
+    f32 lg2(f32 x)
+    {
+        return log10(x) * 3.321928094887362;
+    }
+
+    f32 soft_limit(f32 x)
+    {
+        f32 a = fabs(x);
+        f32 v = x;
+        if (a > 1.0)
+        {
+            f32 e = a - 1.0;
+            v = 1.0 + e / (1.0 + e);
+            if (x < 0.0)
+                v = -v;
+        }
+        return v;
+    }
+
+    // chord intervals in semitones: voice 0 is always the root
+    f32 chord_iv(i32 c, i32 v)
+    {
+        f32 s = 0.0;
+        if (v == 1)
+        {
+            if (c == 1)
+                s = 12.0;
+            if (c == 2)
+                s = 7.0;
+            if (c == 3)
+                s = 4.0;
+            if (c == 4)
+                s = 3.0;
+            if (c == 5)
+                s = 5.0;
+        }
+        if (v == 2)
+        {
+            if (c == 1)
+                s = -12.0;
+            if (c == 2)
+                s = 12.0;
+            if (c == 3)
+                s = 7.0;
+            if (c == 4)
+                s = 7.0;
+            if (c == 5)
+                s = 7.0;
+        }
+        return s;
+    }
+
+    reset
+    {
+        for (i32 i = 0; (i < 32); ++i)
+        {
+            s1l[i] = 0.0;
+            s2l[i] = 0.0;
+            s1r[i] = 0.0;
+            s2r[i] = 0.0;
+            a1l[i] = 1.0;
+            a2l[i] = 0.0;
+            a3l[i] = 0.0;
+            a1r[i] = 1.0;
+            a2r[i] = 0.0;
+            a3r[i] = 0.0;
+            og[i] = 0.0;
+            og_t[i] = 0.0;
+            w_cur[i] = 0.0;
+            w_tgt[i] = 0.0;
+            w_timer[i] = 0.0;
+            g_env[i] = 0.0;
+        }
+        rnd_n = 0.0;
+        for (i32 j = 0; (j < 32); ++j)
+        {
+            lfo_mul[j] = 0.6 + 0.8 * rnd();
+            lfo_off[j] = rnd();
+            w_timer[j] = rnd();
+        }
+        lfo_ph = 0.0;
+        tick = 0;
+        started = 0;
+        snap = 0;
+    }
+
+    process
+    {
+        f32 fs = cast(EC.samplerate, f32);
+
+        if (tick <= 0)
+        {
+            // ---- control rate: every 16 samples
+            tick = 16;
+            f32 dt = 16.0 / fs;
+            f32 kc = fmin(1.0, dt / 0.03);     // 30 ms smoothing
+            if (started == 0)
+                kc = 1.0;
+
+            f32 lp = lg2(clampf(freq, 20.0, 5000.0));
+            if (pmode == 1)
+                lp = lg2(440.0) + (floor(clampf(note, 0.0, 127.0) + 0.5) - 69.0) / 12.0;
+            s_lp = s_lp + kc * (lp - s_lp);
+            f32 shift_oct = clampf(shift, -48.0, 48.0) / 12.0;
+            f32 f0 = pow2(s_lp + shift_oct);
+            ui_f0 = f0;
+
+            i32 ch = chord;
+            if (ch < 0)
+                ch = 0;
+            if (ch > 5)
+                ch = 5;
+            i32 nv = 3;
+            if (ch == 0)
+                nv = 1;
+            i32 mt = modtype;
+            if (mt < 0)
+                mt = 0;
+            if (mt > 3)
+                mt = 3;
+
+            f32 t60 = clampf(decay, 0.01, 30.0);
+            f32 hfd = 0.01 * clampf(hfdamp, 0.0, 100.0);
+            f32 lfd = 0.01 * clampf(lfdamp, 0.0, 100.0);
+            f32 str = 0.01 * clampf(stretch, -100.0, 100.0);
+            f32 oe = 0.01 * clampf(oddeven, -100.0, 100.0);
+            f32 uni = 0.01 * clampf(unison, 0.0, 100.0);
+            f32 ma = 0.01 * clampf(modamt, 0.0, 100.0);
+            f32 mr = clampf(modrate, 0.01, 40.0);
+            f32 expo = 1.0 + 0.5 * str;          // partial spacing: h ^ expo
+            f32 uni_oct = uni * 25.0 / 1200.0;   // up to 25 cents left against right
+            f32 fmax_ok = fmin(0.45 * fs, 20000.0);
+            f32 norm = sqrt(fs / (32.0 * 3.141592653589793)) * 0.9;
+
+            lfo_ph = lfo_ph + mr * dt;
+            if (lfo_ph >= 1.0)
+                lfo_ph = lfo_ph - floor(lfo_ph);
+
+            i32 v = 0;
+            f32 h = 1.0;
+            for (i32 i = 0; (i < 32); ++i)
+            {
+                // modulation (in octaves for pitch, 0..1 for amplitude)
+                f32 mod_l = 0.0;
+                f32 mod_r = 0.0;
+                f32 amp = 1.0;
+                if (mt == 1)
+                {
+                    f32 ph = lfo_ph * lfo_mul[i] + lfo_off[i];
+                    mod_l = ma * (20.0 / 1200.0) * sin(6.283185307179586 * ph);
+                    mod_r = ma * (20.0 / 1200.0) * sin(6.283185307179586 * (ph + 0.25));
+                }
+                if (mt == 2)
+                {
+                    w_timer[i] = w_timer[i] - mr * dt * lfo_mul[i];
+                    if (w_timer[i] <= 0.0)
+                    {
+                        w_timer[i] = w_timer[i] + 1.0;
+                        w_tgt[i] = 2.0 * rnd() - 1.0;
+                    }
+                    w_cur[i] = w_cur[i] + fmin(1.0, mr * dt * 2.0) * (w_tgt[i] - w_cur[i]);
+                    mod_l = ma * (70.0 / 1200.0) * w_cur[i];
+                    mod_r = mod_l;
+                }
+                if (mt == 3)
+                {
+                    if (rnd() < mr * dt * lfo_mul[i])
+                        g_env[i] = 1.0;
+                    g_env[i] = g_env[i] * exp(-dt * mr * 2.5);
+                    amp = 1.0 - ma + ma * g_env[i] * 1.6;
+                }
+
+                // frequency of this partial
+                f32 hp = exp(expo * 0.6931471805599453 * lg2(h));
+                f32 fp = f0 * pow2(chord_iv(ch, v) / 12.0) * hp;
+                f32 fl = fp * pow2(mod_l - uni_oct);
+                f32 fr = fp * pow2(mod_r + uni_oct);
+
+                // odd/even balance: negative keeps odd partials, positive thins the odd ones (not the first)
+                i32 hi = cast(h, i32);
+                f32 ge = 1.0;
+                if (hi == 2 * cast(floor(h * 0.5), i32))
+                    ge = 1.0 - fmax(0.0, -oe);
+                else
+                {
+                    if (hi > 1)
+                        ge = 1.0 - fmax(0.0, oe);
+                }
+                amp = amp * ge;
+
+                // fade out near the top and below 20 Hz
+                f32 ftop = fmax(fl, fr);
+                amp = amp * clampf((fmax_ok - ftop) / (0.05 * fmax_ok), 0.0, 1.0);
+                amp = amp * clampf((fmin(fl, fr) - 15.0) / 10.0, 0.0, 1.0);
+                // natural roll-off: -3 dB per octave of partial number
+                amp = amp / sqrt(h);
+                // the root voice a little stronger than the chord voices
+                if (v > 0)
+                    amp = amp * 0.8;
+
+                // decay of this partial: damping shortens high and low partials
+                f32 fc = clampf(fp, 20.0, fmax_ok);
+                f32 tp = t60 / (1.0 + hfd * hfd * 24.0 * fc / 10000.0);
+                tp = tp / (1.0 + lfd * lfd * 24.0 * 100.0 / fc);
+                tp = fmax(tp, 0.005);
+                f32 bw = 2.198 / tp;                     // -3 dB bandwidth (Hz) for a T60 of tp
+                f32 k = clampf(bw / fc, 0.000001, 1.4);  // 1 / Q
+                // gain: unit peak (k * band-pass) times 1 / sqrt(bandwidth), so noise in gives similar
+                // loudness at any decay
+                og_t[i] = k * amp * norm / sqrt(bw);
+                f32 ks = k;
+                if (hold)
+                    ks = 0.0000001;
+
+                f32 gl = clampf(fl, 10.0, fmax_ok) * 3.141592653589793 / fs;
+                gl = sin(gl) / cos(gl);
+                f32 grr = clampf(fr, 10.0, fmax_ok) * 3.141592653589793 / fs;
+                grr = sin(grr) / cos(grr);
+                f32 b1 = 1.0 / (1.0 + gl * (gl + ks));
+                a1l[i] = b1;
+                a2l[i] = gl * b1;
+                a3l[i] = gl * gl * b1;
+                f32 b2 = 1.0 / (1.0 + grr * (grr + ks));
+                a1r[i] = b2;
+                a2r[i] = grr * b2;
+                a3r[i] = grr * grr * b2;
+                if (started == 0)
+                    og[i] = og_t[i];
+
+                v = v + 1;
+                if (v >= nv)
+                {
+                    v = 0;
+                    h = h + 1.0;
+                }
+            }
+            started = 1;
+        }
+        tick = tick - 1;
+
+        f32 ksm = fmin(1.0, 1.0 / (0.02 * fs));    // 20 ms per-sample smoothing
+        if (snap == 0)
+        {
+            ksm = 1.0;   // first sample: start at the targets
+            snap = 1;
+        }
+        f32 t_gate = 1.0;
+        if (hold)
+            t_gate = 0.0;
+        s_gate = s_gate + ksm * (t_gate - s_gate);
+        s_mix = s_mix + ksm * (0.01 * clampf(mix, 0.0, 100.0) - s_mix);
+        s_in = s_in + ksm * (exp(clampf(drive, -48.0, 24.0) * 0.11512925464970229) - s_in);
+
+        f32<2> x = in;
+        f32 dry_l = x[0];
+        f32 dry_r = x[1];
+        f32 xl = dry_l * s_in * s_gate;
+        f32 xr = dry_r * s_in * s_gate;
+
+        f32 wl = 0.0;
+        f32 wr = 0.0;
+        for (i32 i2 = 0; (i2 < 32); ++i2)
+        {
+            og[i2] = og[i2] + ksm * (og_t[i2] - og[i2]);
+            f32 v3 = xl - s2l[i2];
+            f32 v1 = a1l[i2] * s1l[i2] + a2l[i2] * v3;
+            f32 v2 = s2l[i2] + a2l[i2] * s1l[i2] + a3l[i2] * v3;
+            s1l[i2] = 2.0 * v1 - s1l[i2];
+            s2l[i2] = 2.0 * v2 - s2l[i2];
+            wl = wl + v1 * og[i2];
+            f32 u3 = xr - s2r[i2];
+            f32 u1 = a1r[i2] * s1r[i2] + a2r[i2] * u3;
+            f32 u2 = s2r[i2] + a2r[i2] * s1r[i2] + a3r[i2] * u3;
+            s1r[i2] = 2.0 * u1 - s1r[i2];
+            s2r[i2] = 2.0 * u2 - s2r[i2];
+            wr = wr + u1 * og[i2];
+        }
+        f32 wet_l = soft_limit(wl);
+        f32 wet_r = soft_limit(wr);
+
+        // equal-power dry/wet
+        f32 gd = cos(1.5707963267948966 * s_mix);
+        f32 gw = sin(1.5707963267948966 * s_mix);
+        out[0] = gd * dry_l + gw * wet_l;
+        out[1] = gd * dry_r + gw * wet_r;
+
+        // display data
+        f32 att = 1.0 - exp(-1.0 / (0.01 * fs));
+        f32 rel = 1.0 - exp(-1.0 / (0.3 * fs));
+        f32 ai = fmax(fabs(dry_l), fabs(dry_r));
+        f32 aw = fmax(fabs(wet_l), fabs(wet_r));
+        f32 ri = rel;
+        if (ai > lvl_in)
+            ri = att;
+        lvl_in = lvl_in + ri * (ai - lvl_in);
+        f32 rw = rel;
+        if (aw > lvl_wet)
+            rw = att;
+        lvl_wet = lvl_wet + rw * (aw - lvl_wet);
+        clock = clock + 1.0 / fs;
+        if (clock >= 3600.0)
+            clock = clock - 3600.0;
+        f32 hd = 0.0;
+        if (hold)
+            hd = 1.0;
+        ui_a[0] = lvl_in;
+        ui_a[1] = lvl_wet;
+        ui_a[2] = ui_f0;
+        ui_a[3] = clampf(decay, 0.01, 30.0);
+        ui_b[0] = 0.01 * clampf(stretch, -100.0, 100.0);
+        ui_b[1] = cast(chord, f32);
+        ui_b[2] = 0.01 * clampf(unison, 0.0, 100.0);
+        ui_b[3] = clock;
+        ui_c[0] = hd + 2.0 * cast(modtype, f32);
+        ui_c[1] = 0.01 * clampf(modamt, 0.0, 100.0);
+        ui_c[2] = 0.01 * clampf(oddeven, -100.0, 100.0);
+        ui_c[3] = 0.01 * clampf(hfdamp, 0.0, 100.0);
+    }
+}

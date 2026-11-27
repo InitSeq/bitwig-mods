@@ -17,3 +17,4 @@ Native Bitwig devices, loaded with Patchbay's Framework: Nitro Devices.
 | Device | Type | What it does | Download |
 |---|---|---|---|
 | [Kiln](devices/kiln) | Audio FX | Algorithmic reverb with five characters, Freeze, Shimmer and an animated furnace display. Work in progress: not yet confirmed to load in Bitwig | [Kiln.bwdevice](devices/kiln/Kiln.bwdevice) |
+| [Spectral Resonator](devices/spectral-resonator) | Audio FX | Spectral resonator: the input rings 32 tuned partials per channel (Hz, note or chord), with Stretch, Shift, damping, Chorus/Wander/Grain modulation, Unison and Hold. Work in progress: not yet tried in Bitwig | [Spectral Resonator.bwdevice](devices/spectral-resonator/Spectral%20Resonator.bwdevice) |

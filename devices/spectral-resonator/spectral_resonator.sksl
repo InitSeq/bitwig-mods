@@ -1,0 +1,122 @@
+// Spectral Resonator: the spectrum display. Glowing partials over a log frequency axis (20 Hz .. 20 kHz),
+// heated by the wet signal; sparks fly off the anvil face when the input strikes.
+// audioLow:    input level, wet level, fundamental Hz (with shift), decay s
+// audioMedium: stretch -1..1, chord 0..5, unison 0..1, time s
+// audioHigh:   hold + 2 * modtype, mod amount 0..1, odd/even -1..1, HF damp 0..1
+uniform float4 audioLow;
+uniform float4 audioMedium;
+uniform float4 audioHigh;
+
+float anvHash(float n) {
+    return fract(sin(n * 12.9898) * 43758.5453);
+}
+
+// colour of hot steel: t 0 = dull red, 1 = white-hot; ice 1 = held (frozen blue)
+float3 anvHeat(float t, float ice) {
+    float3 dark = float3(.40, .05, .01);
+    float3 ember = float3(1., .42, .07);
+    float3 hot = float3(1., .90, .62);
+    float3 c = t < .5 ? mix(dark, ember, t * 2.) : mix(ember, hot, t * 2. - 1.);
+    float3 cold = mix(float3(.10, .28, .50), float3(.78, .94, 1.), t);
+    return mix(c, cold, ice);
+}
+
+float anvX(float hz) {
+    return clamp(log(max(hz, 1.) / 20.) / log(1000.), -1., 2.);
+}
+
+// chord interval of voice v (semitones), as in spectral_resonator.nitro
+float anvChord(float c, float v) {
+    if (v < .5) { return 0.; }
+    if (v < 1.5) {
+        return c < .5 ? 0. : (c < 1.5 ? 12. : (c < 2.5 ? 7. : (c < 3.5 ? 4. : (c < 4.5 ? 3. : 5.))));
+    }
+    return c < .5 ? 0. : (c < 1.5 ? -12. : (c < 2.5 ? 12. : 7.));
+}
+
+half4 main(float2 fragCoord) {
+    float2 res = iResolution.xy;
+    float2 uv = float2(fragCoord.x / res.x, 1. - fragCoord.y / res.y);
+    float lvIn = clamp(audioLow.x * 1.5, 0., 1.);
+    float lvWet = clamp(audioLow.y * 1.8, 0., 1.);
+    float f0 = audioLow.z;
+    float decay = audioLow.w;
+    float stretch = audioMedium.x;
+    float chord = audioMedium.y;
+    float uni = audioMedium.z;
+    float time = audioMedium.w;
+    float ice = fract(audioHigh.x * .5) > .25 ? 1. : 0.;
+    float modType = floor(audioHigh.x * .5);
+    float modAmt = audioHigh.y;
+    float oddEven = audioHigh.z;
+    float hfd = audioHigh.w;
+    float nv = chord < .5 ? 1. : 3.;
+    float expo = 1. + .5 * stretch;
+
+    // forged steel background with faint octave lines
+    float3 col = mix(float3(.035, .032, .03), float3(.07, .062, .056), uv.y);
+    for (int o = 0; o < 10; o++) {
+        float ox = anvX(20. * exp2(float(o + 1)));
+        float l = clamp(1. - abs(uv.x - ox) * res.x, 0., 1.);
+        col = col + float3(.03, .026, .024) * l * step(.16, uv.y);
+    }
+
+    // the anvil face: a bright edge low in the display
+    float face = .15;
+    float faceLine = clamp(1. - abs(uv.y - face) * res.y * .5, 0., 1.);
+    col = mix(col, float3(.015, .013, .012), step(uv.y, face));
+    col = col + anvHeat(.35 + .5 * lvIn, ice) * faceLine * (.25 + .75 * lvIn);
+
+    // the partials
+    float slot = 0.;
+    for (int i = 0; i < 32; i++) {
+        float fi = float(i);
+        float v = fi - nv * floor(fi / nv);
+        float h = floor(fi / nv) + 1.;
+        float hz = f0 * exp2(anvChord(chord, v) / 12.) * exp2(expo * log2(h));
+        float sway = 0.;
+        if (modType > .5 && modType < 1.5) {
+            sway = modAmt * .012 * sin(time * (2. + anvHash(fi) * 3.) + fi);
+        }
+        if (modType > 1.5 && modType < 2.5) {
+            sway = modAmt * .02 * (sin(time * (.4 + anvHash(fi + 9.)) + fi * 2.1) * .7 + sin(time * 1.3 + fi) * .3);
+        }
+        float x = anvX(hz) + sway;
+        float even = (h - 2. * floor(h * .5)) < .5 ? 1. : 0.;
+        float ge = even > .5 ? 1. - max(0., -oddEven) : (h > 1.5 ? 1. - max(0., oddEven) : 1.);
+        float amp = ge / sqrt(h) / (1. + hfd * hfd * 24. * hz / 10000.) * (v > .5 ? .8 : 1.);
+        if (modType > 2.5) {
+            float gph = fract(time * (.6 + anvHash(fi * 2.3) * 1.4) + anvHash(fi));
+            amp = amp * (1. - modAmt + modAmt * exp(-gph * 5.) * 1.6);
+        }
+        float top = face + (.08 + .74 * clamp(amp, 0., 1.)) * (.15 + .85 * lvWet);
+        float live = hz < 20000. ? 1. : 0.;
+        float dx = (uv.x - x) * res.x;
+        float w = 1.2 + 1.5 * uni;
+        float core = exp(-dx * dx / (w * w));
+        float glow = exp(-dx * dx / (w * w * 18.)) * .25;
+        float inBar = smoothstep(top + .02, top - .02, uv.y) * step(face, uv.y);
+        float heat = clamp(amp * (.4 + .6 * lvWet) * 1.3, 0., 1.);
+        float fadeUp = .35 + .65 * (1. - (uv.y - face) / max(top - face, .01));
+        col = col + anvHeat(heat * fadeUp, ice) * (core * 1.3 + glow) * inBar * live;
+        // a hot cap on each partial; it lingers with long decays
+        float2 cd = float2(dx, (uv.y - top) * res.y);
+        col = col + anvHeat(heat, ice) * exp(-dot(cd, cd) / (6. + 4. * clamp(decay / 10., 0., 1.))) * live * .8;
+    }
+
+    // sparks off the anvil face when the input strikes (frozen in place when held)
+    for (int j = 0; j < 28; j++) {
+        float fj = float(j);
+        float seed = anvHash(fj + 3.);
+        float life = fract(time * (.7 + seed) * (1. - ice) + anvHash(fj * 5.1));
+        float alive = step(fj / 28., lvIn * 1.2);
+        float2 p = float2(anvHash(fj * 7.7) + (seed - .5) * .4 * life, face + life * (.5 + .4 * seed) - life * life * .45);
+        float2 d = float2((uv.x - p.x) * res.x, (uv.y - p.y) * res.y);
+        col = col + anvHeat(1. - life * .7, ice) * exp(-dot(d, d) / 2.5) * (1. - life) * alive * 1.5;
+    }
+
+    // vignette
+    float2 c = float2(uv.x - .5, uv.y - .5);
+    col = col * (1. - .5 * dot(c, c));
+    return half4(half3(col), 1.);
+}
