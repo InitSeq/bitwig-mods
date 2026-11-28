@@ -1,14 +1,14 @@
-package ch.coldforge.notegen;
+package com.initseq.notegen;
 
-import ch.coldforge.notegen.GenLogic.Layout;
-import ch.coldforge.notegen.GenLogic.Out;
-import ch.coldforge.notegen.GenLogic.Scale;
-import ch.coldforge.notegen.GenLogic.Sounding;
+import com.initseq.notegen.GenLogic.Layout;
+import com.initseq.notegen.GenLogic.Out;
+import com.initseq.notegen.GenLogic.Scale;
+import com.initseq.notegen.GenLogic.Sounding;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Offline checks of the generator, without Bitwig. Run with: java -cp <classes> ch.coldforge.notegen.GenLogicTest
+ * Offline checks of the generator, without Bitwig. Run with: java -cp <classes> com.initseq.notegen.GenLogicTest
  * With the argument "show" it prints one example of each mode instead.
  */
 public final class GenLogicTest {

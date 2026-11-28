@@ -1,4 +1,4 @@
-package ch.coldforge.notegen;
+package com.initseq.notegen;
 
 import bitwig.obf.dvv; // Bitwig's modal dialog
 import bitwig.obf.dwF; // a widget

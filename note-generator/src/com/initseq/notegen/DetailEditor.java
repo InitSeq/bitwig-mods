@@ -1,4 +1,4 @@
-package ch.coldforge.notegen;
+package com.initseq.notegen;
 
 import bitwig.obf.CNg; // a boolean value that can be set
 import bitwig.obf.DrA; // a note clip

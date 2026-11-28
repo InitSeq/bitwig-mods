@@ -1,4 +1,4 @@
-package ch.coldforge.notegen;
+package com.initseq.notegen;
 
 import java.util.ArrayList;
 import java.util.Collections;

@@ -1,4 +1,4 @@
-package ch.coldforge.notegen;
+package com.initseq.notegen;
 
 import bml.api.Bml;
 import bml.notifications.Notifications;
